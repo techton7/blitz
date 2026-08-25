@@ -19,6 +19,7 @@ use taffy::AbsoluteAxis;
 
 use crate::{
     BaseDocument,
+    document::FocusSource,
     node::{ScrollbarRef, SpecialElementData},
     scrolling::{FlingState, ScrollAnimationState},
 };
@@ -545,7 +546,7 @@ pub(crate) fn handle_pointerdown(
             generate_focus_events(
                 doc,
                 &mut |doc| {
-                    doc.set_focus_to(hit.node_id);
+                    doc.set_focus_to_with_source(hit.node_id, FocusSource::Pointer);
                 },
                 dispatch_event,
             );
@@ -659,7 +660,7 @@ pub(crate) fn handle_click(
                     generate_focus_events(
                         doc,
                         &mut |doc| {
-                            doc.set_focus_to(node_id);
+                            doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
                         },
                         dispatch_event,
                     );
@@ -687,7 +688,7 @@ pub(crate) fn handle_click(
                     generate_focus_events(
                         doc,
                         &mut |doc| {
-                            doc.set_focus_to(node_id);
+                            doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
                         },
                         dispatch_event,
                     );
@@ -713,7 +714,7 @@ pub(crate) fn handle_click(
                             generate_focus_events(
                                 doc,
                                 &mut |doc| {
-                                    doc.set_focus_to(node_id);
+                                    doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
                                 },
                                 dispatch_event,
                             );
