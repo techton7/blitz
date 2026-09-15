@@ -23,7 +23,7 @@ blitz-dom = { workspace = true, features = ["tracing", "custom-widget"] }
 blitz-paint = { workspace = true, features = ["custom-widget"] }
 blitz-html = { workspace = true }
 blitz-shell = { workspace = true, features = ["tracing"] }
-dioxus-native = { workspace = true, features = ["system-fonts", "prelude"] }
+dioxus-native = { workspace = true, features = ["system-fonts", "prelude", "clipboard"] }
 wgpu_context = { workspace = true }
 wgpu = { workspace = true }
 color = { workspace = true }

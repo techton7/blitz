@@ -13,6 +13,7 @@ pub fn launch_dx_native() {
 fn app() -> Element {
     let mut show_cube = use_signal(|| true);
 
+    // 1. 기존 큐브 색상용 시그널
     let color_str = use_signal(|| String::from("red"));
     let color = use_memo(move || {
         parse_color(&color_str())
@@ -21,6 +22,9 @@ fn app() -> Element {
             .split()
             .0
     });
+
+    // 2. [추가] 한글 IME 테스트용 텍스트 시그널
+    let mut test_text = use_signal(|| String::from("hangul"));
 
     use_effect(move || println!("{:?}", color().components));
 
@@ -37,6 +41,34 @@ fn app() -> Element {
             }
             br {}
             ColorControl { label: "Color:", color_str }
+            br {}
+
+            // ==========================================
+            // [추가] 한글 IME 테스트용 입력 필드 섹션
+            // ==========================================
+            div { style: "margin-top: 10px; display: flex; flex-direction: column; gap: 4px;",
+                label { style: "font-weight: bold; font-size: 0.9rem;", "한글 IME 테스트 입력:" }
+                input {
+                    style: "
+                        width: 100%;
+                        padding: 8px;
+                        font-size: 1rem;
+                        color: black;
+                        background: white;
+                        border-radius: 4px;
+                        border: 1px solid #ccc;
+                        outline: none;
+                    ",
+                    placeholder: "여기에 한글을 입력해보세요...",
+                    value: test_text(),
+                    oninput: move |evt| { *test_text.write() = evt.value() },
+                }
+                p { style: "margin: 4px 0; color: #89b4fa; font-size: 0.95rem; word-break: break-all;",
+                    "실시간 반영: {test_text}"
+                }
+            }
+            // ==========================================
+
             p {
                 "This overlay demonstrates that the custom WGPU content can be rendered beneath layers of HTML content"
             }
