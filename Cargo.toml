@@ -319,7 +319,7 @@ rustc-hash = { workspace = true }
 # parley = { path = "../parley/parley" }
 # fontique = { path = "../parley/fontique" }
 
-[patch.crates-io]
-winit = { path = "/Volumes/HDD-1T-2021-Mac/Vault/business/project/mine/crate/winit/winit" }
-winit-appkit = { path = "/Volumes/HDD-1T-2021-Mac/Vault/business/project/mine/crate/winit/winit-appkit" }
-parley = { path = "/Volumes/HDD-1T-2021-Mac/Vault/business/project/mine/crate/parley/parley" }
+# [patch.crates-io]
+# winit = { path = "/Volumes/HDD-1T-2021-Mac/Vault/business/project/mine/crate/winit/winit" }
+# winit-appkit = { path = "/Volumes/HDD-1T-2021-Mac/Vault/business/project/mine/crate/winit/winit-appkit" }
+# parley = { path = "/Volumes/HDD-1T-2021-Mac/Vault/business/project/mine/crate/parley/parley" }

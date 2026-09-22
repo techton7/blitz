@@ -180,6 +180,11 @@ impl NodeHandle {
         let err = MountedError::OperationFailed(Box::new(NodeNotExistErr(node_id)));
         Box::pin(async move { Err(err) })
     }
+
+    /// Dispatch a synthetic click on this node using the native DOM event plumbing.
+    pub fn click(&self) -> bool {
+        dispatch_synthetic_click(&self.doc(), self.node_id, Modifiers::empty())
+    }
 }
 
 #[derive(Debug)]
@@ -651,6 +656,47 @@ pub fn synthetic_click_event(node: &Node, modifiers: Modifiers) -> Box<dyn Any> 
     Box::new(NativePointerData(
         node.synthetic_click_event_data(modifiers),
     ))
+}
+
+/// Dispatch a synthetic click event on a target node in `doc`, bubbling up the DOM hierarchy
+/// to locate the nearest Dioxus element listener.
+pub fn dispatch_synthetic_click(
+    doc: &BaseDocument,
+    node_id: NodeId,
+    modifiers: Modifiers,
+) -> bool {
+    let mut current = Some(node_id);
+    let mut target = None;
+    while let Some(id) = current {
+        if let Some(node) = doc.get_node(id) {
+            if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
+                target = Some((dioxus_id, id));
+                break;
+            }
+            current = node.parent;
+        } else {
+            break;
+        }
+    }
+
+    let Some((dioxus_id, target_node_id)) = target else {
+        return false;
+    };
+
+    let Some(target_node) = doc.get_node(target_node_id) else {
+        return false;
+    };
+
+    let event_data = synthetic_click_event(target_node, modifiers);
+    let platform_event = PlatformEventData::new(event_data);
+    let dx_event = dioxus_core::Event::new(Rc::new(platform_event) as Rc<dyn Any>, true);
+
+    if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+        runtime.handle_event("click", dx_event, dioxus_id);
+        true
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]

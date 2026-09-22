@@ -27,7 +27,7 @@ fn wrap_event_data<T: Any>(value: T) -> Rc<dyn Any> {
 }
 
 /// Get the value of the "dioxus-data-id" attribute parsed aa usize
-fn get_dioxus_id(node: &Node) -> Option<ElementId> {
+pub(crate) fn get_dioxus_id(node: &Node) -> Option<ElementId> {
     node.element_data()?
         .attrs
         .iter()
