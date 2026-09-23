@@ -1,10 +1,11 @@
 use blitz_dom::{
-    BaseDocument, Node, ScrollBehavior as BlitzScrollBehavior,
+    BaseDocument, Document, Node, ScrollBehavior as BlitzScrollBehavior,
     ScrollLogicalPosition as BlitzScrollLogicalPosition,
 };
+use blitz_traits::SmolStr;
 use blitz_traits::events::{
     BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, BlitzScrollEvent, BlitzWheelDelta,
-    BlitzWheelEvent, MouseEventButton,
+    BlitzWheelEvent, KeyState, MouseEventButton, UiEvent,
 };
 use dioxus_html::{
     AnimationData, CancelData, ClipboardData, CompositionData, DragData, FocusData, FormData,
@@ -798,6 +799,232 @@ pub fn dispatch_synthetic_input(
     }
 }
 
+/// Helper to map key string to (Key, Code, Modifiers)
+pub fn parse_key_str(raw: &str) -> (Key, Code, Modifiers) {
+    let mut mods = Modifiers::empty();
+    let mut key_part = raw.trim();
+
+    while let Some(idx) = key_part.find('+') {
+        let prefix = key_part[..idx].trim();
+        if prefix.eq_ignore_ascii_case("shift") {
+            mods |= Modifiers::SHIFT;
+        } else if prefix.eq_ignore_ascii_case("ctrl") || prefix.eq_ignore_ascii_case("control") {
+            mods |= Modifiers::CONTROL;
+        } else if prefix.eq_ignore_ascii_case("cmd")
+            || prefix.eq_ignore_ascii_case("meta")
+            || prefix.eq_ignore_ascii_case("super")
+        {
+            mods |= Modifiers::SUPER;
+        } else if prefix.eq_ignore_ascii_case("alt") || prefix.eq_ignore_ascii_case("opt") {
+            mods |= Modifiers::ALT;
+        }
+        key_part = key_part[idx + 1..].trim();
+    }
+
+    let (key, code) = match key_part {
+        "Tab" => (Key::Tab, Code::Tab),
+        "Enter" => (Key::Enter, Code::Enter),
+        "Space" | " " => (Key::Character(" ".into()), Code::Space),
+        "Escape" | "Esc" => (Key::Escape, Code::Escape),
+        "Backspace" => (Key::Backspace, Code::Backspace),
+        "Delete" | "Del" => (Key::Delete, Code::Delete),
+        "ArrowLeft" => (Key::ArrowLeft, Code::ArrowLeft),
+        "ArrowRight" => (Key::ArrowRight, Code::ArrowRight),
+        "ArrowUp" => (Key::ArrowUp, Code::ArrowUp),
+        "ArrowDown" => (Key::ArrowDown, Code::ArrowDown),
+        "a" | "A" => (Key::Character(key_part.to_string()), Code::KeyA),
+        "c" | "C" => (Key::Character(key_part.to_string()), Code::KeyC),
+        "v" | "V" => (Key::Character(key_part.to_string()), Code::KeyV),
+        "x" | "X" => (Key::Character(key_part.to_string()), Code::KeyX),
+        "z" | "Z" => (Key::Character(key_part.to_string()), Code::KeyZ),
+        other => {
+            if other.chars().count() == 1 {
+                (Key::Character(other.to_string()), Code::Unidentified)
+            } else {
+                (Key::Unidentified, Code::Unidentified)
+            }
+        }
+    };
+
+    (key, code, mods)
+}
+
+/// Dispatch a synthetic keyboard action on a target node in `doc`.
+/// Drives real Blitz DOM keyboard handling, Dioxus VirtualDom keyboard events,
+/// and reactive updates for Focus/Activation, Text Editing, Navigation, and Modifiers.
+pub fn dispatch_synthetic_key(
+    doc: &mut BaseDocument,
+    node_id: Option<NodeId>,
+    key_str: &str,
+    modifiers: Modifiers,
+) -> Result<NodeId, String> {
+    let (key, code, parsed_mods) = parse_key_str(key_str);
+    let combined_mods = modifiers | parsed_mods;
+
+    let target_node_id = match node_id {
+        Some(nid) => {
+            if doc.get_focussed_node_id() != Some(nid) {
+                doc.set_focus_to(nid);
+            }
+            nid
+        }
+        None => doc
+            .get_focussed_node_id()
+            .unwrap_or_else(|| doc.root_node().id),
+    };
+
+    // 1. Handle Tab / Shift+Tab focus traversal
+    if key == Key::Tab {
+        let old_focus = doc.get_focussed_node_id();
+        let new_focus = if combined_mods.contains(Modifiers::SHIFT) {
+            doc.focus_prev_node()
+        } else {
+            doc.focus_next_node()
+        };
+
+        if let Some(new_id) = new_focus {
+            if let Some(old_id) = old_focus {
+                if old_id != new_id {
+                    if let Some(node) = doc.get_node(old_id) {
+                        if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
+                            let event_data = Box::new(NativeFocusData);
+                            let platform_event = Rc::new(PlatformEventData::new(event_data));
+                            let dx_blur = dioxus_core::Event::new(platform_event as Rc<dyn Any>, false);
+                            if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+                                runtime.handle_event("blur", dx_blur, dioxus_id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(node) = doc.get_node(new_id) {
+                if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
+                    let event_data = Box::new(NativeFocusData);
+                    let platform_event = Rc::new(PlatformEventData::new(event_data));
+                    let dx_focus = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, false);
+                    let dx_focusin = dioxus_core::Event::new(platform_event as Rc<dyn Any>, true);
+                    if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+                        runtime.handle_event("focus", dx_focus, dioxus_id);
+                        runtime.handle_event("focusin", dx_focusin, dioxus_id);
+                    }
+                }
+            }
+            return Ok(new_id);
+        }
+        return Ok(target_node_id);
+    }
+
+    // 2. Handle Escape focus clearing
+    if key == Key::Escape {
+        if let Some(old_id) = doc.get_focussed_node_id() {
+            doc.clear_focus();
+            if let Some(node) = doc.get_node(old_id) {
+                if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
+                    let event_data = Box::new(NativeFocusData);
+                    let platform_event = Rc::new(PlatformEventData::new(event_data));
+                    let dx_blur = dioxus_core::Event::new(platform_event as Rc<dyn Any>, false);
+                    if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+                        runtime.handle_event("blur", dx_blur, dioxus_id);
+                    }
+                }
+            }
+        }
+        return Ok(target_node_id);
+    }
+
+    // 3. Handle Enter / Space button activation
+    let is_button = doc.get_node(target_node_id).and_then(|n| n.element_data()).is_some_and(|el| {
+        el.name.local.as_ref() == "button"
+            || el.attrs().iter().any(|a| a.name.local.as_ref() == "role" && a.value == "button")
+    });
+    if is_button && (key == Key::Enter || key == Key::Character(" ".into())) {
+        dispatch_synthetic_click(doc, target_node_id, combined_mods);
+    }
+
+    // 4. Construct BlitzKeyEvent for KeyDown and KeyUp
+    let text_payload = match &key {
+        Key::Character(s) => Some(SmolStr::new(s)),
+        _ => None,
+    };
+
+    let key_down = BlitzKeyEvent {
+        key: key.clone(),
+        code,
+        modifiers: combined_mods,
+        location: Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Pressed,
+        text: text_payload,
+    };
+
+    let key_up = BlitzKeyEvent {
+        key: key.clone(),
+        code,
+        modifiers: combined_mods,
+        location: Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: KeyState::Released,
+        text: None,
+    };
+
+    // 5. Dispatch UI events to BaseDocument
+    doc.handle_ui_event(UiEvent::KeyDown(key_down.clone()));
+    doc.handle_ui_event(UiEvent::KeyUp(key_up.clone()));
+
+    // 6. If target node is a text input, propagate updated value to Dioxus listeners
+    if let Some(node) = doc.get_node(target_node_id) {
+        if let Some(el) = node.element_data() {
+            if let Some(input_data) = el.text_input_data() {
+                let current_val = input_data.editor.raw_text().to_string();
+                let form_data = Box::new(NativeFormData {
+                    value: current_val,
+                    values: vec![],
+                });
+                let platform_event = Rc::new(PlatformEventData::new(form_data));
+                let dx_input = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, true);
+                let dx_change = dioxus_core::Event::new(platform_event as Rc<dyn Any>, true);
+
+                if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
+                    if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+                        runtime.handle_event("input", dx_input, dioxus_id);
+                        runtime.handle_event("change", dx_change, dioxus_id);
+                    }
+                }
+            }
+        }
+    }
+
+    // 7. Dispatch Dioxus KeyDown and KeyUp events
+    let mut current = Some(target_node_id);
+    while let Some(id) = current {
+        if let Some(node) = doc.get_node(id) {
+            if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
+                let kb_down = Box::new(BlitzKeyboardData(key_down.clone()));
+                let platform_down = Rc::new(PlatformEventData::new(kb_down));
+                let dx_down = dioxus_core::Event::new(platform_down as Rc<dyn Any>, true);
+
+                let kb_up = Box::new(BlitzKeyboardData(key_up.clone()));
+                let platform_up = Rc::new(PlatformEventData::new(kb_up));
+                let dx_up = dioxus_core::Event::new(platform_up as Rc<dyn Any>, true);
+
+                if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+                    runtime.handle_event("keydown", dx_down, dioxus_id);
+                    runtime.handle_event("keyup", dx_up, dioxus_id);
+                }
+                break;
+            }
+            current = node.parent;
+        } else {
+            break;
+        }
+    }
+
+    Ok(target_node_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,5 +1155,145 @@ mod tests {
         assert!(input_dispatched, "dispatch_synthetic_input must return true");
         doc.poll(None);
         assert_eq!(*typed_signal.borrow(), "hello world", "oninput handler must receive new value");
+    }
+
+    #[test]
+    fn test_synthetic_keyboard_events() {
+        use crate::dioxus_document::DioxusDocument;
+        use blitz_dom::{Document, DocumentConfig};
+        use dioxus::prelude::*;
+        use std::cell::RefCell;
+
+        #[derive(Clone, PartialEq)]
+        struct KeyAppProps {
+            input_focused: Rc<RefCell<bool>>,
+            btn_focused: Rc<RefCell<bool>>,
+            typed: Rc<RefCell<String>>,
+            clicks: Rc<RefCell<u32>>,
+        }
+
+        fn key_test_app(props: KeyAppProps) -> Element {
+            let in_foc_f = props.input_focused.clone();
+            let in_foc_b = props.input_focused.clone();
+            let typed_c = props.typed.clone();
+            let btn_foc_f = props.btn_focused.clone();
+            let btn_foc_b = props.btn_focused.clone();
+            let clicks_c = props.clicks.clone();
+            rsx! {
+                div {
+                    input {
+                        id: "key-input",
+                        onfocus: move |_| {
+                            *in_foc_f.borrow_mut() = true;
+                        },
+                        onblur: move |_| {
+                            *in_foc_b.borrow_mut() = false;
+                        },
+                        oninput: move |evt: FormEvent| {
+                            *typed_c.borrow_mut() = evt.value();
+                        },
+                    }
+                    button {
+                        id: "key-button",
+                        onfocus: move |_| {
+                            *btn_foc_f.borrow_mut() = true;
+                        },
+                        onblur: move |_| {
+                            *btn_foc_b.borrow_mut() = false;
+                        },
+                        onclick: move |_| {
+                            *clicks_c.borrow_mut() += 1;
+                        },
+                        "Submit"
+                    }
+                }
+            }
+        }
+
+        let input_focused = Rc::new(RefCell::new(false));
+        let btn_focused = Rc::new(RefCell::new(false));
+        let typed = Rc::new(RefCell::new(String::new()));
+        let clicks = Rc::new(RefCell::new(0u32));
+
+        let props = KeyAppProps {
+            input_focused: input_focused.clone(),
+            btn_focused: btn_focused.clone(),
+            typed: typed.clone(),
+            clicks: clicks.clone(),
+        };
+
+        let vdom = VirtualDom::new_with_props(key_test_app, props);
+        let mut doc = DioxusDocument::new(vdom, DocumentConfig::default());
+        doc.initial_build();
+        doc.inner.borrow_mut().resolve(0.0);
+
+        let input_id = doc.inner.borrow().get_element_by_id("key-input").unwrap();
+        let btn_id = doc.inner.borrow().get_element_by_id("key-button").unwrap();
+
+        let _guard = dioxus_core::RuntimeGuard::new(doc.vdom.runtime());
+
+        // 1. Focus traversal via Tab
+        let tab1 = dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Tab", Modifiers::empty()).unwrap();
+        assert_eq!(tab1, input_id, "Tab from initial state should focus input");
+        doc.poll(None);
+        assert!(*input_focused.borrow(), "Input onfocus must have run");
+        assert!(!*btn_focused.borrow());
+
+        // Tab again to focus button
+        let tab2 = dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Tab", Modifiers::empty()).unwrap();
+        assert_eq!(tab2, btn_id, "Tab from input should focus button");
+        doc.poll(None);
+        assert!(!*input_focused.borrow(), "Input onblur must have run");
+        assert!(*btn_focused.borrow(), "Button onfocus must have run");
+
+        // Shift+Tab back to input
+        let stab = dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Shift+Tab", Modifiers::empty()).unwrap();
+        assert_eq!(stab, input_id, "Shift+Tab should focus input again");
+        doc.poll(None);
+        assert!(*input_focused.borrow(), "Input onfocus must have run again");
+        assert!(!*btn_focused.borrow(), "Button onblur must have run");
+
+        // 2. Text editing via typing and Backspace
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "a", Modifiers::empty()).unwrap();
+        doc.poll(None);
+        assert_eq!(*typed.borrow(), "a");
+
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "c", Modifiers::empty()).unwrap();
+        doc.poll(None);
+        assert_eq!(*typed.borrow(), "ac");
+
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "Backspace", Modifiers::empty()).unwrap();
+        doc.poll(None);
+        assert_eq!(*typed.borrow(), "a");
+
+        // 3. Modifier sentinel: Ctrl/Cmd + A (Select All) then overwrite
+        #[cfg(target_os = "macos")]
+        let action_mod = Modifiers::SUPER;
+        #[cfg(not(target_os = "macos"))]
+        let action_mod = Modifiers::CONTROL;
+
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "a", action_mod).unwrap();
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "z", Modifiers::empty()).unwrap();
+        doc.poll(None);
+        assert_eq!(*typed.borrow(), "z", "Cmd/Ctrl + A followed by typing 'z' must replace entire text");
+
+        // 4. Button activation via Enter and Space
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Tab", Modifiers::empty()).unwrap();
+        doc.poll(None);
+        assert_eq!(doc.inner.borrow().get_focussed_node_id(), Some(btn_id));
+
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(btn_id), "Enter", Modifiers::empty()).unwrap();
+        doc.poll(None);
+        assert_eq!(*clicks.borrow(), 1, "Enter on button must trigger click");
+
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(btn_id), "Space", Modifiers::empty()).unwrap();
+        doc.poll(None);
+        assert_eq!(*clicks.borrow(), 2, "Space on button must trigger click");
+
+        // 5. Escape clears focus
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Escape", Modifiers::empty()).unwrap();
+        doc.poll(None);
+        assert_eq!(doc.inner.borrow().active_focus_node_id(), None, "Escape must clear explicit focus");
+        assert!(!*btn_focused.borrow(), "Button onblur must have run on Escape");
     }
 }

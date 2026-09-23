@@ -17,7 +17,8 @@ pub use blitz_dom::DocumentConfig;
 pub use dioxus_document::DioxusDocument;
 pub use events::{
     NodeHandle, NativeFocusData, NativeFormData, dispatch_synthetic_click,
-    dispatch_synthetic_focus, dispatch_synthetic_input, synthetic_click_event,
+    dispatch_synthetic_focus, dispatch_synthetic_input, dispatch_synthetic_key,
+    parse_key_str, synthetic_click_event,
 };
 pub use write_once_attr::{CustomWidgetAttr, SubDocumentAttr};
 

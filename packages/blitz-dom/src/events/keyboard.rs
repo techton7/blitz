@@ -32,6 +32,11 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(DomEvent)>(
             return;
         }
 
+        if event.key == Key::Escape {
+            doc.clear_focus();
+            return;
+        }
+
         // Handle copy (Ctrl+C/Cmd+C) for text selection when no text input is focused
         if event.state.is_pressed() {
             let action_mod = event.modifiers.contains(ACTION_MOD);

@@ -610,6 +610,11 @@ impl BaseDocument {
             .or(self.try_root_element().map(|el| el.id))
     }
 
+    /// Returns the currently explicitly focused node, or None if focus is cleared.
+    pub fn active_focus_node_id(&self) -> Option<NodeId> {
+        self.focus_node_id
+    }
+
     pub fn mutate<'doc>(&'doc mut self) -> DocumentMutator<'doc> {
         DocumentMutator::new(self)
     }
@@ -1634,16 +1639,24 @@ impl BaseDocument {
     }
 
     pub fn focus_next_node(&mut self) -> Option<NodeId> {
-        let focussed_node_id = self.get_focussed_node_id()?;
-        let id = self.next_node(&self.nodes[focussed_node_id], |node| node.is_focussable())?;
+        let id = if let Some(focussed_node_id) = self.get_focussed_node_id() {
+            self.next_node(&self.nodes[focussed_node_id], |node| node.is_focussable())?
+        } else {
+            let root = self.root_node_id;
+            self.next_node(&self.nodes[root], |node| node.is_focussable())?
+        };
         self.set_focus_to(id);
         Some(id)
     }
 
     /// Move focus to the previous focussable node in the document
     pub fn focus_prev_node(&mut self) -> Option<NodeId> {
-        let focussed_node_id = self.get_focussed_node_id()?;
-        let id = self.prev_node(&self.nodes[focussed_node_id], |node| node.is_focussable())?;
+        let id = if let Some(focussed_node_id) = self.get_focussed_node_id() {
+            self.prev_node(&self.nodes[focussed_node_id], |node| node.is_focussable())?
+        } else {
+            let root = self.root_node_id;
+            self.prev_node(&self.nodes[root], |node| node.is_focussable())?
+        };
         self.set_focus_to(id);
         Some(id)
     }

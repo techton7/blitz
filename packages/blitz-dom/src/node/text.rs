@@ -248,11 +248,17 @@ impl TextInputData {
         match event.key {
             Key::ArrowLeft => {
                 #[cfg(target_os = "macos")]
-                if action_mod {
-                    if shift {
-                        driver.select_to_line_start();
+                {
+                    if action_mod {
+                        if shift {
+                            driver.select_to_line_start();
+                        } else {
+                            driver.move_to_line_start();
+                        }
+                    } else if shift {
+                        driver.select_left();
                     } else {
-                        driver.move_to_line_start();
+                        driver.move_left();
                     }
                     return Some(GeneratedTextInputEvent::Select);
                 }
@@ -275,11 +281,17 @@ impl TextInputData {
             }
             Key::ArrowRight => {
                 #[cfg(target_os = "macos")]
-                if action_mod {
-                    if shift {
-                        driver.select_to_line_end();
+                {
+                    if action_mod {
+                        if shift {
+                            driver.select_to_line_end();
+                        } else {
+                            driver.move_to_line_end();
+                        }
+                    } else if shift {
+                        driver.select_right();
                     } else {
-                        driver.move_to_line_end();
+                        driver.move_right();
                     }
                     return Some(GeneratedTextInputEvent::Select);
                 }
@@ -302,11 +314,17 @@ impl TextInputData {
             }
             Key::ArrowUp => {
                 #[cfg(target_os = "macos")]
-                if action_mod {
-                    if shift {
-                        driver.select_to_text_start();
+                {
+                    if action_mod {
+                        if shift {
+                            driver.select_to_text_start();
+                        } else {
+                            driver.move_to_text_start();
+                        }
+                    } else if shift {
+                        driver.select_up();
                     } else {
-                        driver.move_to_text_start();
+                        driver.move_up();
                     }
                     return Some(GeneratedTextInputEvent::Select);
                 }
@@ -323,11 +341,17 @@ impl TextInputData {
             }
             Key::ArrowDown => {
                 #[cfg(target_os = "macos")]
-                if action_mod {
-                    if shift {
-                        driver.select_to_text_end();
+                {
+                    if action_mod {
+                        if shift {
+                            driver.select_to_text_end();
+                        } else {
+                            driver.move_to_text_end();
+                        }
+                    } else if shift {
+                        driver.select_down();
                     } else {
-                        driver.move_to_text_end();
+                        driver.move_down();
                     }
                     return Some(GeneratedTextInputEvent::Select);
                 }
@@ -344,11 +368,15 @@ impl TextInputData {
             }
             Key::Backspace => {
                 #[cfg(target_os = "macos")]
-                if action_mod {
-                    if driver.editor.raw_selection().is_collapsed() {
-                        driver.select_to_line_start();
+                {
+                    if action_mod {
+                        if driver.editor.raw_selection().is_collapsed() {
+                            driver.select_to_line_start();
+                        }
+                        driver.delete_selection();
+                    } else {
+                        driver.backdelete();
                     }
-                    driver.delete_selection();
                     return Some(GeneratedTextInputEvent::Input);
                 }
 
@@ -362,15 +390,22 @@ impl TextInputData {
                     return Some(GeneratedTextInputEvent::Input);
                 }
             }
-            // On macOS this is handled by the apple standard keybindings
-            #[cfg(not(target_os = "macos"))]
             Key::Delete => {
-                if action_mod {
-                    driver.delete_word();
-                } else {
+                #[cfg(target_os = "macos")]
+                {
                     driver.delete();
+                    return Some(GeneratedTextInputEvent::Input);
                 }
-                return Some(GeneratedTextInputEvent::Input);
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    if action_mod {
+                        driver.delete_word();
+                    } else {
+                        driver.delete();
+                    }
+                    return Some(GeneratedTextInputEvent::Input);
+                }
             }
             Key::Home => {
                 if action_mod {
