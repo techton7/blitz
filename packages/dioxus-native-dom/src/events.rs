@@ -185,6 +185,16 @@ impl NodeHandle {
     pub fn click(&self) -> bool {
         dispatch_synthetic_click(&self.doc(), self.node_id, Modifiers::empty())
     }
+
+    /// Dispatch a synthetic focus on this node using the native DOM event plumbing.
+    pub fn focus_synthetic(&self) -> bool {
+        dispatch_synthetic_focus(&mut self.doc_mut(), self.node_id)
+    }
+
+    /// Dispatch a synthetic input / value change on this node using the native DOM event plumbing.
+    pub fn set_value_synthetic(&self, value: &str) -> bool {
+        dispatch_synthetic_input(&mut self.doc_mut(), self.node_id, value)
+    }
 }
 
 #[derive(Debug)]
@@ -699,6 +709,95 @@ pub fn dispatch_synthetic_click(
     }
 }
 
+/// Dispatch a synthetic focus event on a target node in `doc`.
+/// Sets focus on the Blitz DOM node and dispatches "focus" and "focusin" events to Dioxus listeners.
+pub fn dispatch_synthetic_focus(
+    doc: &mut BaseDocument,
+    node_id: NodeId,
+) -> bool {
+    let mut current = Some(node_id);
+    let mut target = None;
+    while let Some(id) = current {
+        if let Some(node) = doc.get_node(id) {
+            if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
+                target = Some((dioxus_id, id));
+                break;
+            }
+            current = node.parent;
+        } else {
+            break;
+        }
+    }
+
+    let Some((dioxus_id, target_node_id)) = target else {
+        return false;
+    };
+
+    // Update Blitz DOM focus state
+    let _ = doc.set_focus_to(target_node_id);
+
+    // Dispatch Dioxus focus events
+    let event_data = Box::new(NativeFocusData);
+    let platform_event = Rc::new(PlatformEventData::new(event_data));
+    let dx_focus = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, false);
+
+    if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+        runtime.handle_event("focus", dx_focus, dioxus_id);
+        let dx_focusin = dioxus_core::Event::new(platform_event as Rc<dyn Any>, true);
+        runtime.handle_event("focusin", dx_focusin, dioxus_id);
+        true
+    } else {
+        true
+    }
+}
+
+/// Dispatch a synthetic input/value change on a target node in `doc`.
+/// Updates the Blitz DOM text input editor (if applicable) and dispatches "input" and "change"
+/// events containing the new value to Dioxus listeners.
+pub fn dispatch_synthetic_input(
+    doc: &mut BaseDocument,
+    node_id: NodeId,
+    value: &str,
+) -> bool {
+    let mut current = Some(node_id);
+    let mut target = None;
+    while let Some(id) = current {
+        if let Some(node) = doc.get_node(id) {
+            if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
+                target = Some((dioxus_id, id));
+                break;
+            }
+            current = node.parent;
+        } else {
+            break;
+        }
+    }
+
+    let Some((dioxus_id, target_node_id)) = target else {
+        return false;
+    };
+
+    // If target node is a text input, update its editor buffer and refresh layout
+    doc.set_text_input_value(target_node_id, value);
+
+    // Dispatch Dioxus input and change events
+    let form_data = Box::new(NativeFormData {
+        value: value.to_string(),
+        values: vec![],
+    });
+    let platform_event = Rc::new(PlatformEventData::new(form_data));
+    let dx_input = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, true);
+
+    if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+        runtime.handle_event("input", dx_input, dioxus_id);
+        let dx_change = dioxus_core::Event::new(platform_event as Rc<dyn Any>, true);
+        runtime.handle_event("change", dx_change, dioxus_id);
+        true
+    } else {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,5 +870,63 @@ mod tests {
         let data = NativeTouchData(finger_event(0, 1.0, 2.0));
         assert!(data.touches().is_empty());
         assert_eq!(data.touches_changed().len(), 1);
+    }
+
+    #[test]
+    fn test_synthetic_focus_and_input_events() {
+        use crate::dioxus_document::DioxusDocument;
+        use blitz_dom::{Document, DocumentConfig};
+        use dioxus::prelude::*;
+        use std::cell::RefCell;
+
+        #[derive(Clone, PartialEq)]
+        struct TestProps {
+            focused: Rc<RefCell<bool>>,
+            typed: Rc<RefCell<String>>,
+        }
+
+        fn test_app(props: TestProps) -> Element {
+            rsx! {
+                input {
+                    id: "test-input",
+                    onfocus: move |_| {
+                        *props.focused.borrow_mut() = true;
+                    },
+                    oninput: move |evt: FormEvent| {
+                        *props.typed.borrow_mut() = evt.value();
+                    },
+                }
+            }
+        }
+
+        let focused_signal = Rc::new(RefCell::new(false));
+        let typed_signal = Rc::new(RefCell::new(String::new()));
+
+        let props = TestProps {
+            focused: focused_signal.clone(),
+            typed: typed_signal.clone(),
+        };
+
+        let vdom = VirtualDom::new_with_props(test_app, props);
+        let mut doc = DioxusDocument::new(vdom, DocumentConfig::default());
+        doc.initial_build();
+
+        let input_id = doc.inner.borrow().get_element_by_id("test-input").unwrap();
+
+        // Establish the Dioxus runtime guard for the test thread
+        let _guard = dioxus_core::RuntimeGuard::new(doc.vdom.runtime());
+
+        // 1. Dispatch synthetic focus
+        let focused = dispatch_synthetic_focus(&mut doc.inner.borrow_mut(), input_id);
+        assert!(focused, "dispatch_synthetic_focus must return true");
+        doc.poll(None);
+        assert!(*focused_signal.borrow(), "onfocus handler must have fired and updated signal");
+        assert_eq!(doc.inner.borrow().get_focussed_node_id(), Some(input_id));
+
+        // 2. Dispatch synthetic input
+        let input_dispatched = dispatch_synthetic_input(&mut doc.inner.borrow_mut(), input_id, "hello world");
+        assert!(input_dispatched, "dispatch_synthetic_input must return true");
+        doc.poll(None);
+        assert_eq!(*typed_signal.borrow(), "hello world", "oninput handler must receive new value");
     }
 }

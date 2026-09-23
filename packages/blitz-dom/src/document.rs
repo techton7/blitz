@@ -2431,6 +2431,25 @@ impl BaseDocument {
         }
     }
 
+    /// Set the text value of a text input element and refresh its layout.
+    pub fn set_text_input_value(&mut self, node_id: NodeId, text: &str) -> bool {
+        let Some(node) = self.nodes.get_mut(node_id) else {
+            return false;
+        };
+
+        if let Some(text_input) = node
+            .element_data_mut()
+            .and_then(|el| el.text_input_data_mut())
+        {
+            let mut font_ctx = self.font_ctx.lock().unwrap();
+            let layout_ctx = &mut self.layout_ctx;
+            text_input.set_text(&mut font_ctx, layout_ctx, text);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Recompute the scroll offset of the text input at `node_id` (if any) so that its caret
     /// remains visible within the input's content box.
     pub(crate) fn clamp_text_input_scroll(&mut self, node_id: NodeId) {
