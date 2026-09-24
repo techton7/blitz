@@ -5,8 +5,9 @@ use blitz_dom::{
 use blitz_traits::SmolStr;
 use blitz_traits::events::{
     BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, BlitzScrollEvent, BlitzWheelDelta,
-    BlitzWheelEvent, KeyState, MouseEventButton, UiEvent,
+    BlitzWheelEvent, KeyState, MouseEventButtons, PointerCoords, UiEvent,
 };
+pub use blitz_traits::events::MouseEventButton;
 use dioxus_html::{
     AnimationData, CancelData, ClipboardData, CompositionData, DragData, FocusData, FormData,
     FormValue, HasFileData, HasFocusData, HasFormData, HasKeyboardData, HasMouseData,
@@ -1025,6 +1026,320 @@ pub fn dispatch_synthetic_key(
     Ok(target_node_id)
 }
 
+/// Helper to find nearest Dioxus element ID and target NodeId for a given node.
+pub fn find_dioxus_target(doc: &BaseDocument, node_id: NodeId) -> Option<(dioxus_core::ElementId, NodeId)> {
+    let mut current = Some(node_id);
+    while let Some(id) = current {
+        if let Some(node) = doc.get_node(id) {
+            if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
+                return Some((dioxus_id, id));
+            }
+            current = node.parent;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+/// Helper to compute absolute center coordinates of a node.
+pub fn get_node_center_coords(doc: &BaseDocument, node_id: NodeId) -> Option<(f32, f32)> {
+    let node = doc.get_node(node_id)?;
+    let pos = node.absolute_position(0.0, 0.0);
+    let size = node.final_layout().size;
+    Some((pos.x + size.width / 2.0, pos.y + size.height / 2.0))
+}
+
+/// Dispatch a synthetic pointer/mouse move event in `doc`.
+/// Drives Blitz DOM hover state resolution (`doc.set_hover_to`) and delivers
+/// Dioxus pointer and mouse events (`pointermove`, `mousemove`, `pointerenter`, `pointerleave`, etc.).
+pub fn dispatch_synthetic_pointer_move(
+    doc: &mut BaseDocument,
+    target_node_id: Option<NodeId>,
+    coords: Option<(f32, f32)>,
+    modifiers: Modifiers,
+) -> Result<NodeId, String> {
+    let (x, y) = if let Some(c) = coords {
+        c
+    } else if let Some(nid) = target_node_id {
+        get_node_center_coords(doc, nid)
+            .ok_or_else(|| format!("Target node #{:?} not found for pointer move", nid))?
+    } else {
+        (0.0, 0.0)
+    };
+
+    let prev_hover = doc.get_hover_node_id();
+
+    let ptr_event = BlitzPointerEvent {
+        id: BlitzPointerId::Mouse,
+        is_primary: true,
+        coords: PointerCoords {
+            page_x: x,
+            page_y: y,
+            screen_x: x,
+            screen_y: y,
+            client_x: x,
+            client_y: y,
+        },
+        button: MouseEventButton::Main,
+        buttons: MouseEventButtons::None,
+        mods: modifiers,
+        details: Default::default(),
+        element: Default::default(),
+        active_pointers: Default::default(),
+    };
+
+    // 1. Dispatch UI event to BaseDocument (updates doc.hover_node_id and element states)
+    doc.handle_ui_event(UiEvent::PointerMove(ptr_event.clone()));
+
+    let curr_hover = doc.get_hover_node_id().or(target_node_id);
+    let resolved_nid = curr_hover.unwrap_or_else(|| doc.root_node().id);
+
+    // 2. Dispatch Dioxus pointer events via Runtime::current
+    if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+        let platform_event = Rc::new(PlatformEventData::new(Box::new(NativePointerData(ptr_event.clone()))));
+
+        // If hovered target changed, dispatch leave on old and enter on new
+        if prev_hover != curr_hover {
+            if let Some(prev_id) = prev_hover {
+                if let Some((prev_dx_id, _)) = find_dioxus_target(doc, prev_id) {
+                    let dx_leave = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, false);
+                    runtime.handle_event("pointerleave", dx_leave.clone(), prev_dx_id);
+                    runtime.handle_event("mouseleave", dx_leave, prev_dx_id);
+
+                    let dx_out = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, true);
+                    runtime.handle_event("pointerout", dx_out.clone(), prev_dx_id);
+                    runtime.handle_event("mouseout", dx_out, prev_dx_id);
+                }
+            }
+
+            if let Some(curr_id) = curr_hover {
+                if let Some((curr_dx_id, _)) = find_dioxus_target(doc, curr_id) {
+                    let dx_enter = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, false);
+                    runtime.handle_event("pointerenter", dx_enter.clone(), curr_dx_id);
+                    runtime.handle_event("mouseenter", dx_enter, curr_dx_id);
+
+                    let dx_over = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, true);
+                    runtime.handle_event("pointerover", dx_over.clone(), curr_dx_id);
+                    runtime.handle_event("mouseover", dx_over, curr_dx_id);
+                }
+            }
+        }
+
+        // Always dispatch pointermove / mousemove to current hovered target
+        if let Some((curr_dx_id, _)) = find_dioxus_target(doc, resolved_nid) {
+            let dx_move = dioxus_core::Event::new(platform_event as Rc<dyn Any>, true);
+            runtime.handle_event("pointermove", dx_move.clone(), curr_dx_id);
+            runtime.handle_event("mousemove", dx_move, curr_dx_id);
+        }
+    }
+
+    Ok(resolved_nid)
+}
+
+/// Dispatch a synthetic pointer/mouse down event on a target node or coordinates in `doc`.
+/// Drives Blitz DOM active state (`doc.active_node()`), focus, text selection, and delivers
+/// Dioxus `pointerdown` and `mousedown` events.
+pub fn dispatch_synthetic_pointer_down(
+    doc: &mut BaseDocument,
+    target_node_id: Option<NodeId>,
+    coords: Option<(f32, f32)>,
+    button: MouseEventButton,
+    modifiers: Modifiers,
+) -> Result<NodeId, String> {
+    let (x, y) = if let Some(c) = coords {
+        c
+    } else if let Some(nid) = target_node_id {
+        get_node_center_coords(doc, nid)
+            .ok_or_else(|| format!("Target node #{:?} not found for pointer down", nid))?
+    } else if let Some(nid) = doc.get_hover_node_id() {
+        get_node_center_coords(doc, nid)
+            .unwrap_or((0.0, 0.0))
+    } else {
+        (0.0, 0.0)
+    };
+
+    // Ensure hover is set to coordinates
+    let _ = doc.set_hover_to(x, y);
+
+    let buttons = MouseEventButtons::from(button);
+
+    let ptr_event = BlitzPointerEvent {
+        id: BlitzPointerId::Mouse,
+        is_primary: true,
+        coords: PointerCoords {
+            page_x: x,
+            page_y: y,
+            screen_x: x,
+            screen_y: y,
+            client_x: x,
+            client_y: y,
+        },
+        button,
+        buttons,
+        mods: modifiers,
+        details: Default::default(),
+        element: Default::default(),
+        active_pointers: Default::default(),
+    };
+
+    // 1. Dispatch UI event to BaseDocument (activates node, sets mousedown_node_id, handles focus)
+    doc.handle_ui_event(UiEvent::PointerDown(ptr_event.clone()));
+
+    let resolved_nid = target_node_id
+        .or(doc.get_hover_node_id())
+        .unwrap_or_else(|| doc.root_node().id);
+
+    // 2. Dispatch Dioxus pointerdown and mousedown events
+    if let Some((dioxus_id, _)) = find_dioxus_target(doc, resolved_nid) {
+        if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+            let platform_event = Rc::new(PlatformEventData::new(Box::new(NativePointerData(ptr_event))));
+            let dx_down = dioxus_core::Event::new(platform_event as Rc<dyn Any>, true);
+            runtime.handle_event("pointerdown", dx_down.clone(), dioxus_id);
+            runtime.handle_event("mousedown", dx_down, dioxus_id);
+        }
+    }
+
+    Ok(resolved_nid)
+}
+
+/// Dispatch a synthetic pointer/mouse up event on a target node or coordinates in `doc`.
+/// Drives Blitz DOM unactive state (`doc.unactive_node()`) and delivers
+/// Dioxus `pointerup` and `mouseup` events.
+pub fn dispatch_synthetic_pointer_up(
+    doc: &mut BaseDocument,
+    target_node_id: Option<NodeId>,
+    coords: Option<(f32, f32)>,
+    button: MouseEventButton,
+    modifiers: Modifiers,
+) -> Result<NodeId, String> {
+    let (x, y) = if let Some(c) = coords {
+        c
+    } else if let Some(nid) = target_node_id {
+        get_node_center_coords(doc, nid)
+            .ok_or_else(|| format!("Target node #{:?} not found for pointer up", nid))?
+    } else if let Some(nid) = doc.get_hover_node_id() {
+        get_node_center_coords(doc, nid)
+            .unwrap_or((0.0, 0.0))
+    } else {
+        (0.0, 0.0)
+    };
+
+    let ptr_event = BlitzPointerEvent {
+        id: BlitzPointerId::Mouse,
+        is_primary: true,
+        coords: PointerCoords {
+            page_x: x,
+            page_y: y,
+            screen_x: x,
+            screen_y: y,
+            client_x: x,
+            client_y: y,
+        },
+        button,
+        buttons: MouseEventButtons::None,
+        mods: modifiers,
+        details: Default::default(),
+        element: Default::default(),
+        active_pointers: Default::default(),
+    };
+
+    // 1. Dispatch UI event to BaseDocument (unactivates node)
+    doc.handle_ui_event(UiEvent::PointerUp(ptr_event.clone()));
+
+    let resolved_nid = target_node_id
+        .or(doc.get_hover_node_id())
+        .unwrap_or_else(|| doc.root_node().id);
+
+    // 2. Dispatch Dioxus pointerup and mouseup events
+    if let Some((dioxus_id, _)) = find_dioxus_target(doc, resolved_nid) {
+        if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+            let platform_event = Rc::new(PlatformEventData::new(Box::new(NativePointerData(ptr_event))));
+            let dx_up = dioxus_core::Event::new(platform_event as Rc<dyn Any>, true);
+            runtime.handle_event("pointerup", dx_up.clone(), dioxus_id);
+            runtime.handle_event("mouseup", dx_up, dioxus_id);
+        }
+    }
+
+    Ok(resolved_nid)
+}
+
+/// Dispatch a synthetic mouse wheel / scroll event in `doc`.
+/// Drives Blitz DOM scroll container propagation and delivers Dioxus `wheel` and `scroll` events.
+pub fn dispatch_synthetic_wheel(
+    doc: &mut BaseDocument,
+    target_node_id: Option<NodeId>,
+    coords: Option<(f32, f32)>,
+    delta_x: f64,
+    delta_y: f64,
+    modifiers: Modifiers,
+) -> Result<NodeId, String> {
+    let (x, y) = if let Some(c) = coords {
+        c
+    } else if let Some(nid) = target_node_id {
+        get_node_center_coords(doc, nid)
+            .ok_or_else(|| format!("Target node #{:?} not found for wheel", nid))?
+    } else if let Some(nid) = doc.get_hover_node_id() {
+        get_node_center_coords(doc, nid)
+            .unwrap_or((0.0, 0.0))
+    } else {
+        (0.0, 0.0)
+    };
+
+    // Ensure hover position is set at scroll point
+    let _ = doc.set_hover_to(x, y);
+
+    let resolved_nid = doc.get_hover_node_id()
+        .or(target_node_id)
+        .unwrap_or_else(|| doc.root_node().id);
+
+    let wheel_event = BlitzWheelEvent {
+        delta: BlitzWheelDelta::Pixels(delta_x, delta_y),
+        coords: PointerCoords {
+            page_x: x,
+            page_y: y,
+            screen_x: x,
+            screen_y: y,
+            client_x: x,
+            client_y: y,
+        },
+        buttons: MouseEventButtons::None,
+        mods: modifiers,
+        element: Default::default(),
+    };
+
+    // 1. Dispatch UI event to BaseDocument (triggers handle_wheel and doc.scroll_chain_by)
+    doc.handle_ui_event(UiEvent::Wheel(wheel_event.clone()));
+
+    // 2. Dispatch Dioxus wheel and scroll events
+    if let Some((dioxus_id, target_actual_id)) = find_dioxus_target(doc, resolved_nid) {
+        if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+            let platform_wheel = Rc::new(PlatformEventData::new(Box::new(NativeWheelData(wheel_event))));
+            let dx_wheel = dioxus_core::Event::new(platform_wheel as Rc<dyn Any>, true);
+            runtime.handle_event("wheel", dx_wheel, dioxus_id);
+
+            // Fetch current scroll offset of the scrolled node
+            if let Some(node) = doc.get_node(target_actual_id) {
+                let offset = node.scroll_offset();
+                let layout = node.final_layout();
+                let scroll_evt = BlitzScrollEvent {
+                    scroll_top: offset.y,
+                    scroll_left: offset.x,
+                    scroll_width: layout.size.width as i32,
+                    scroll_height: layout.size.height as i32,
+                    client_width: layout.size.width as i32,
+                    client_height: layout.size.height as i32,
+                };
+                let platform_scroll = Rc::new(PlatformEventData::new(Box::new(NativeScrollData(scroll_evt))));
+                let dx_scroll = dioxus_core::Event::new(platform_scroll as Rc<dyn Any>, false);
+                runtime.handle_event("scroll", dx_scroll, dioxus_id);
+            }
+        }
+    }
+
+    Ok(resolved_nid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1295,5 +1610,123 @@ mod tests {
         doc.poll(None);
         assert_eq!(doc.inner.borrow().active_focus_node_id(), None, "Escape must clear explicit focus");
         assert!(!*btn_focused.borrow(), "Button onblur must have run on Escape");
+    }
+
+    #[test]
+    fn test_synthetic_pointer_events() {
+        use crate::dioxus_document::DioxusDocument;
+        use blitz_dom::{Document, DocumentConfig};
+        use dioxus::prelude::*;
+        use std::cell::RefCell;
+
+        #[derive(Clone, PartialEq)]
+        struct PointerAppProps {
+            hovered: Rc<RefCell<bool>>,
+            pressed: Rc<RefCell<bool>>,
+            wheel_delta_y: Rc<RefCell<f64>>,
+        }
+
+        fn pointer_test_app(props: PointerAppProps) -> Element {
+            let h_enter = props.hovered.clone();
+            let h_leave = props.hovered.clone();
+            let p_down = props.pressed.clone();
+            let p_up = props.pressed.clone();
+            let w_delta = props.wheel_delta_y.clone();
+
+            rsx! {
+                div {
+                    id: "pointer-target",
+                    style: "width: 100px; height: 100px;",
+                    onmouseenter: move |_| {
+                        *h_enter.borrow_mut() = true;
+                    },
+                    onmouseleave: move |_| {
+                        *h_leave.borrow_mut() = false;
+                    },
+                    onpointerdown: move |_| {
+                        *p_down.borrow_mut() = true;
+                    },
+                    onpointerup: move |_| {
+                        *p_up.borrow_mut() = false;
+                    },
+                    onwheel: move |evt: WheelEvent| {
+                        if let dioxus_html::geometry::WheelDelta::Pixels(v) = evt.delta() {
+                            *w_delta.borrow_mut() = v.y;
+                        }
+                    },
+                    "Target"
+                }
+            }
+        }
+
+        let hovered = Rc::new(RefCell::new(false));
+        let pressed = Rc::new(RefCell::new(false));
+        let wheel_delta_y = Rc::new(RefCell::new(0.0f64));
+
+        let props = PointerAppProps {
+            hovered: hovered.clone(),
+            pressed: pressed.clone(),
+            wheel_delta_y: wheel_delta_y.clone(),
+        };
+
+        let vdom = VirtualDom::new_with_props(pointer_test_app, props);
+        let mut doc = DioxusDocument::new(vdom, DocumentConfig::default());
+        doc.initial_build();
+        doc.inner.borrow_mut().resolve(0.0);
+
+        let target_id = doc.inner.borrow().get_element_by_id("pointer-target").unwrap();
+        let _guard = dioxus_core::RuntimeGuard::new(doc.vdom.runtime());
+
+        // 1. Synthetic Pointer Move / Hover
+        let move_res = dispatch_synthetic_pointer_move(
+            &mut doc.inner.borrow_mut(),
+            Some(target_id),
+            None,
+            Modifiers::empty(),
+        ).unwrap();
+        assert_eq!(move_res, target_id);
+        doc.poll(None);
+        assert_eq!(doc.inner.borrow().get_hover_node_id(), Some(target_id));
+        assert!(doc.inner.borrow().get_node(target_id).unwrap().is_hovered());
+        assert!(*hovered.borrow(), "onmouseenter handler must have fired");
+
+        // 2. Synthetic Pointer Down
+        let down_res = dispatch_synthetic_pointer_down(
+            &mut doc.inner.borrow_mut(),
+            Some(target_id),
+            None,
+            MouseEventButton::Main,
+            Modifiers::empty(),
+        ).unwrap();
+        assert_eq!(down_res, target_id);
+        doc.poll(None);
+        assert!(doc.inner.borrow().get_node(target_id).unwrap().is_active());
+        assert!(*pressed.borrow(), "onpointerdown handler must have fired");
+
+        // 3. Synthetic Pointer Up
+        let up_res = dispatch_synthetic_pointer_up(
+            &mut doc.inner.borrow_mut(),
+            Some(target_id),
+            None,
+            MouseEventButton::Main,
+            Modifiers::empty(),
+        ).unwrap();
+        assert_eq!(up_res, target_id);
+        doc.poll(None);
+        assert!(!doc.inner.borrow().get_node(target_id).unwrap().is_active());
+        assert!(!*pressed.borrow(), "onpointerup handler must have reset pressed state");
+
+        // 4. Synthetic Wheel
+        let wheel_res = dispatch_synthetic_wheel(
+            &mut doc.inner.borrow_mut(),
+            Some(target_id),
+            None,
+            0.0,
+            42.0,
+            Modifiers::empty(),
+        ).unwrap();
+        assert_eq!(wheel_res, target_id);
+        doc.poll(None);
+        assert_eq!(*wheel_delta_y.borrow(), 42.0, "onwheel handler must have observed delta_y");
     }
 }
