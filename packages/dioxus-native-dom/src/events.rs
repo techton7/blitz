@@ -812,39 +812,54 @@ pub fn parse_key_str(raw: &str) -> (Key, Code, Modifiers) {
         } else if prefix.eq_ignore_ascii_case("ctrl") || prefix.eq_ignore_ascii_case("control") {
             mods |= Modifiers::CONTROL;
         } else if prefix.eq_ignore_ascii_case("cmd")
+            || prefix.eq_ignore_ascii_case("command")
             || prefix.eq_ignore_ascii_case("meta")
             || prefix.eq_ignore_ascii_case("super")
         {
             mods |= Modifiers::SUPER;
-        } else if prefix.eq_ignore_ascii_case("alt") || prefix.eq_ignore_ascii_case("opt") {
+        } else if prefix.eq_ignore_ascii_case("alt")
+            || prefix.eq_ignore_ascii_case("opt")
+            || prefix.eq_ignore_ascii_case("option")
+        {
             mods |= Modifiers::ALT;
         }
         key_part = key_part[idx + 1..].trim();
     }
 
-    let (key, code) = match key_part {
-        "Tab" => (Key::Tab, Code::Tab),
-        "Enter" => (Key::Enter, Code::Enter),
-        "Space" | " " => (Key::Character(" ".into()), Code::Space),
-        "Escape" | "Esc" => (Key::Escape, Code::Escape),
-        "Backspace" => (Key::Backspace, Code::Backspace),
-        "Delete" | "Del" => (Key::Delete, Code::Delete),
-        "ArrowLeft" => (Key::ArrowLeft, Code::ArrowLeft),
-        "ArrowRight" => (Key::ArrowRight, Code::ArrowRight),
-        "ArrowUp" => (Key::ArrowUp, Code::ArrowUp),
-        "ArrowDown" => (Key::ArrowDown, Code::ArrowDown),
-        "a" | "A" => (Key::Character(key_part.to_string()), Code::KeyA),
-        "c" | "C" => (Key::Character(key_part.to_string()), Code::KeyC),
-        "v" | "V" => (Key::Character(key_part.to_string()), Code::KeyV),
-        "x" | "X" => (Key::Character(key_part.to_string()), Code::KeyX),
-        "z" | "Z" => (Key::Character(key_part.to_string()), Code::KeyZ),
-        other => {
-            if other.chars().count() == 1 {
-                (Key::Character(other.to_string()), Code::Unidentified)
-            } else {
-                (Key::Unidentified, Code::Unidentified)
-            }
-        }
+    let (key, code) = if key_part.eq_ignore_ascii_case("tab") {
+        (Key::Tab, Code::Tab)
+    } else if key_part.eq_ignore_ascii_case("enter") || key_part.eq_ignore_ascii_case("return") {
+        (Key::Enter, Code::Enter)
+    } else if key_part.eq_ignore_ascii_case("space") || key_part == " " {
+        (Key::Character(" ".into()), Code::Space)
+    } else if key_part.eq_ignore_ascii_case("escape") || key_part.eq_ignore_ascii_case("esc") {
+        (Key::Escape, Code::Escape)
+    } else if key_part.eq_ignore_ascii_case("backspace") {
+        (Key::Backspace, Code::Backspace)
+    } else if key_part.eq_ignore_ascii_case("delete") || key_part.eq_ignore_ascii_case("del") {
+        (Key::Delete, Code::Delete)
+    } else if key_part.eq_ignore_ascii_case("arrowleft") || key_part.eq_ignore_ascii_case("left") {
+        (Key::ArrowLeft, Code::ArrowLeft)
+    } else if key_part.eq_ignore_ascii_case("arrowright") || key_part.eq_ignore_ascii_case("right") {
+        (Key::ArrowRight, Code::ArrowRight)
+    } else if key_part.eq_ignore_ascii_case("arrowup") || key_part.eq_ignore_ascii_case("up") {
+        (Key::ArrowUp, Code::ArrowUp)
+    } else if key_part.eq_ignore_ascii_case("arrowdown") || key_part.eq_ignore_ascii_case("down") {
+        (Key::ArrowDown, Code::ArrowDown)
+    } else if key_part.eq_ignore_ascii_case("a") {
+        (Key::Character(key_part.to_string()), Code::KeyA)
+    } else if key_part.eq_ignore_ascii_case("c") {
+        (Key::Character(key_part.to_string()), Code::KeyC)
+    } else if key_part.eq_ignore_ascii_case("v") {
+        (Key::Character(key_part.to_string()), Code::KeyV)
+    } else if key_part.eq_ignore_ascii_case("x") {
+        (Key::Character(key_part.to_string()), Code::KeyX)
+    } else if key_part.eq_ignore_ascii_case("z") {
+        (Key::Character(key_part.to_string()), Code::KeyZ)
+    } else if key_part.chars().count() == 1 {
+        (Key::Character(key_part.to_string()), Code::Unidentified)
+    } else {
+        (Key::Unidentified, Code::Unidentified)
     };
 
     (key, code, mods)
