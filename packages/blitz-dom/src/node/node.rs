@@ -1,5 +1,5 @@
 use crate::Document;
-use crate::layout::damage::HoistedPaintChildren;
+use crate::layout::paint_tree::{HoistedPaintChild, StackingContext};
 use bitflags::bitflags;
 use blitz_traits::events::{
     BlitzPointerEvent, BlitzPointerId, DomEventData, HitResult, PointerCoords,
@@ -18,6 +18,8 @@ use std::fmt::Write;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use style::computed_values::isolation::T as Isolation;
+use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
 use style::invalidation::element::restyle_hints::RestyleHint;
 use style::properties::ComputedValues;
 use style::properties::generated::longhands::position::computed_value::T as Position;
@@ -27,6 +29,8 @@ use style::shared_lock::SharedRwLock;
 use style::stylesheets::UrlExtraData;
 use style::values::computed::CSSPixelLength;
 use style::values::computed::Display as StyloDisplay;
+use style::values::computed::Rotate;
+use style::values::generics::transform::{Scale, Translate};
 use style::values::specified::box_::{DisplayInside, DisplayOutside};
 use style_dom::ElementState;
 use style_traits::values::ToCss;
@@ -98,6 +102,15 @@ pub struct Node {
     pub layout_parent: Cell<Option<NodeId>>,
     /// A separate child list that includes anonymous collections of inline elements
     pub layout_children: RefCell<Option<ThinVec<NodeId>>>,
+    /// Out-of-flow (absolutely/fixed positioned) boxes for which this node is the
+    /// containing block. Recorded by Taffy's out-of-flow positioning pass. The
+    /// `Layout.location` of these boxes is relative to this node's border box.
+    pub hoisted_children: RefCell<ThinVec<NodeId>>,
+    /// For an out-of-flow box that was hoisted by Taffy's out-of-flow positioning
+    /// pass, the node whose `hoisted_children` list contains it (its containing
+    /// block). The box's `Layout.location` is relative to this node rather than
+    /// to its `layout_parent`. `None` for in-flow boxes.
+    pub oof_containing_block: Cell<Option<NodeId>>,
     /// Anonymous block boxes created for this node during layout construction.
     ///
     /// Anonymous blocks live only in the slab (they are not part of the DOM
@@ -106,7 +119,11 @@ pub struct Node {
     pub anonymous_blocks: ThinVec<NodeId>,
     /// The same as layout_children, but sorted by z-index
     pub paint_children: RefCell<Option<ThinVec<NodeId>>>,
-    pub stacking_context: Option<Box<HoistedPaintChildren>>,
+    pub stacking_context: Option<Box<StackingContext>>,
+    /// The hoisted entries this node's subtree pushed into the enclosing
+    /// stacking context on its last (non-skipped) paint-tree build. Replayed
+    /// when the subtree is skipped as clean. Empty for stacking-context roots.
+    pub sc_contribution_cache: RefCell<ThinVec<HoistedPaintChild>>,
 
     // Flags
     pub flags: NodeFlags,
@@ -216,6 +233,19 @@ impl Node {
     pub fn clear_layout_cache(&mut self) {
         if let Some(layout_data) = self.try_layout_data_mut() {
             layout_data.cache.clear();
+        }
+    }
+
+    /// Clear this node's taffy layout cache and any cached inline
+    /// `content_widths`, forcing a full relayout of it on the next pass.
+    pub fn invalidate_layout_cache(&mut self) {
+        self.clear_layout_cache();
+        if let Some(inline_layout) = self
+            .data
+            .downcast_element_mut()
+            .and_then(|el| el.inline_layout_data.as_mut())
+        {
+            inline_layout.content_widths = None;
         }
     }
 
@@ -384,10 +414,13 @@ impl Node {
             parent: None,
             children: ThinVec::new(),
             layout_parent: Cell::new(None),
+            oof_containing_block: Cell::new(None),
             layout_children: RefCell::new(None),
+            hoisted_children: RefCell::new(ThinVec::new()),
             anonymous_blocks: ThinVec::new(),
             paint_children: RefCell::new(None),
             stacking_context: None,
+            sc_contribution_cache: RefCell::new(ThinVec::new()),
 
             flags: NodeFlags::empty(),
             data,
@@ -491,6 +524,29 @@ impl Node {
         match &self.data {
             NodeData::Text(data) => data.content.chars().all(|c| c.is_ascii_whitespace()),
             _ => false,
+        }
+    }
+
+    /// Whether this is an empty or whitespace-only text node whose whitespace may be collapsed
+    /// away under the `white-space-collapse` it inherits from its parent.
+    pub fn is_collapsible_whitespace_node(&self) -> bool {
+        let NodeData::Text(data) = &self.data else {
+            return false;
+        };
+        if data.content.is_empty() {
+            return true;
+        }
+        if !data.content.chars().all(|c| c.is_ascii_whitespace()) {
+            return false;
+        }
+        let white_space_collapse = self
+            .parent
+            .and_then(|parent_id| self.with(parent_id).primary_styles())
+            .map(|style| style.clone_white_space_collapse());
+        match white_space_collapse {
+            Some(WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces) => false,
+            Some(WhiteSpaceCollapse::PreserveBreaks) => !data.content.contains('\n'),
+            Some(WhiteSpaceCollapse::Collapse) | None => true,
         }
     }
 
@@ -1201,6 +1257,25 @@ impl Node {
             .unwrap_or(taffy::Display::Block)
     }
 
+    /// The node's `position` as a [`taffy::Position`]. Returns [`taffy::Position::Static`]
+    /// for nodes without computed styles (e.g. text nodes).
+    pub fn taffy_position(&self) -> taffy::Position {
+        self.primary_styles()
+            .map(|s| stylo_taffy::convert::position(s.get_box().position))
+            .unwrap_or(taffy::Position::Static)
+    }
+
+    /// Whether the node is an out-of-flow box that Taffy positions from its containing
+    /// block's hoisted child list rather than from its parent (`display: none` boxes
+    /// generate no box and are never hoisted).
+    pub fn is_out_of_flow(&self) -> bool {
+        self.primary_styles().is_some_and(|s| {
+            let box_style = s.get_box();
+            stylo_taffy::convert::position(box_style.position).is_out_of_flow()
+                && stylo_taffy::convert::display(box_style.display) != taffy::Display::None
+        })
+    }
+
     pub fn text_content(&self) -> String {
         let mut out = String::new();
         self.write_text_content(&mut out);
@@ -1229,11 +1304,20 @@ impl Node {
         }
     }
 
+    /// The `order` sort key of this node within a flex/grid container's
+    /// `layout_children`. The list is stable-sorted by this key when the
+    /// container's children are constructed (`collect_layout_children`) and
+    /// re-collected when a child's `order` changes (`REORDER_CHILDREN` damage).
+    ///
+    /// ::before/::after pseudos are flex/grid items and honor `order`. They
+    /// sit first/last in the constructed list, and the sort is stable, so
+    /// ties keep ::before first and ::after last. Out-of-flow children are
+    /// not flex/grid items, so they key as 0 and keep source order.
     pub fn order(&self) -> i32 {
-        // ::before/::after pseudos are flex/grid items and honor `order`.
-        // They sit first/last in layout_children, and the `order` sort is
-        // stable, so ties keep ::before first and ::after last.
-        self.primary_styles().map(|s| s.clone_order()).unwrap_or(0)
+        self.primary_styles()
+            .filter(|s| !matches!(s.get_box().position, Position::Absolute | Position::Fixed))
+            .map(|s| s.clone_order())
+            .unwrap_or(0)
     }
 
     pub fn z_index(&self) -> i32 {
@@ -1264,18 +1348,58 @@ impl Node {
             return true;
         }
 
-        if self.transform().is_some() {
+        let box_style = style.get_box();
+        if !box_style.transform.0.is_empty()
+            || !matches!(box_style.rotate, Rotate::None)
+            || !matches!(box_style.scale, Scale::None)
+            || !matches!(box_style.translate, Translate::None)
+        {
+            return true;
+        }
+
+        if self.applies_atomic_paint_effect() {
+            return true;
+        }
+
+        if style.get_box().isolation == Isolation::Isolate {
             return true;
         }
 
         // TODO: mix-blend-mode
-        // TODO: filter
-        // TODO: clip-path
-        // TODO: mask
-        // TODO: isolation
         // TODO: contain
 
         false
+    }
+
+    /// Whether this node's styles apply an atomic paint effect (opacity, filter,
+    /// clip-path, mask) to its subtree.
+    pub(crate) fn applies_atomic_paint_effect(&self) -> bool {
+        use style::values::computed::basic_shape::ClipPath;
+        use style::values::generics::image::GenericImage;
+
+        let Some(style) = self.primary_styles() else {
+            return false;
+        };
+
+        if style.clone_opacity() != 1.0 {
+            return true;
+        }
+
+        let effects = style.get_effects();
+        if !effects.filter.0.is_empty() {
+            return true;
+        }
+
+        if !matches!(style.clone_clip_path(), ClipPath::None) {
+            return true;
+        }
+
+        style
+            .get_svg()
+            .mask_image
+            .0
+            .iter()
+            .any(|image| !matches!(image, GenericImage::None))
     }
 
     /// Takes an (x, y) position (relative to the *parent's* top-left corner) and returns:
@@ -1343,11 +1467,10 @@ impl Node {
 
         let matches_hoisted_content = match &self.stacking_context {
             Some(sc) => {
-                let content_area = sc.content_area;
-                x >= content_area.left + self.scroll_offset().x as f32
-                    && x <= content_area.right + self.scroll_offset().x as f32
-                    && y >= content_area.top + self.scroll_offset().y as f32
-                    && y <= content_area.bottom + self.scroll_offset().y as f32
+                // Both the point (after the scroll adjustment above) and the
+                // bbox are in this node's unscrolled content coordinates.
+                let bbox = sc.hoisted_content_bbox(self.tree(), self.id, scale);
+                x >= bbox.left && x <= bbox.right && y >= bbox.top && y <= bbox.bottom
             }
             None => false,
         };
@@ -1376,11 +1499,11 @@ impl Node {
             *scrollbar = Some(sb);
         }
 
+        let content_box_offset = taffy::Point {
+            x: self.final_layout().padding.left + self.final_layout().border.left,
+            y: self.final_layout().padding.top + self.final_layout().border.top,
+        };
         if self.flags.is_inline_root() {
-            let content_box_offset = taffy::Point {
-                x: self.final_layout().padding.left + self.final_layout().border.left,
-                y: self.final_layout().padding.top + self.final_layout().border.top,
-            };
             x -= content_box_offset.x;
             y -= content_box_offset.y;
         }
@@ -1389,8 +1512,9 @@ impl Node {
         if matches_hoisted_content {
             if let Some(hoisted) = &self.stacking_context {
                 for hoisted_child in hoisted.pos_z_hoisted_children().rev() {
-                    let x = x - hoisted_child.position.x;
-                    let y = y - hoisted_child.position.y;
+                    let pos = hoisted_child.position(self.tree(), self.id);
+                    let x = x - pos.x;
+                    let y = y - pos.y;
                     if let Some(hit) = self
                         .with(hoisted_child.node_id)
                         .hit_inner(x, y, scale, scrollbar)
@@ -1403,7 +1527,30 @@ impl Node {
 
         // Call `.hit()` on each child in turn. If any return `Some` then return that value. Else return `Some(self.id).
         for child_id in self.paint_children.borrow().iter().flatten().rev() {
-            if let Some(hit) = self.with(*child_id).hit_inner(x, y, scale, scrollbar) {
+            let child = self.with(*child_id);
+            let child_position = child.taffy_position();
+            let mut child_x = x;
+            let mut child_y = y;
+            if child_position.is_out_of_flow() {
+                // Out-of-flow children's layout location is relative to this node's
+                // border box, so undo the inline-root content-box offset applied above
+                if self.flags.is_inline_root() {
+                    child_x += content_box_offset.x;
+                    child_y += content_box_offset.y;
+                }
+                // Fixed-position children of the root element are positioned
+                // against the viewport and do not scroll with it. (A fixed box
+                // whose containing block is a transformed ancestor scrolls with
+                // that ancestor like any other out-of-flow box.)
+                if child_position == taffy::Position::Fixed && self.containing_block().is_none() {
+                    child_x -= self.scroll_offset().x as f32;
+                    child_y -= self.scroll_offset().y as f32;
+                    let viewport_scroll = self.tree().viewport_scroll();
+                    child_x -= viewport_scroll.x as f32;
+                    child_y -= viewport_scroll.y as f32;
+                }
+            }
+            if let Some(hit) = child.hit_inner(child_x, child_y, scale, scrollbar) {
                 return Some(hit);
             }
         }
@@ -1412,8 +1559,9 @@ impl Node {
         if matches_hoisted_content {
             if let Some(hoisted) = &self.stacking_context {
                 for hoisted_child in hoisted.neg_z_hoisted_children().rev() {
-                    let x = x - hoisted_child.position.x;
-                    let y = y - hoisted_child.position.y;
+                    let pos = hoisted_child.position(self.tree(), self.id);
+                    let x = x - pos.x;
+                    let y = y - pos.y;
                     if let Some(hit) = self
                         .with(hoisted_child.node_id)
                         .hit_inner(x, y, scale, scrollbar)
@@ -1434,8 +1582,7 @@ impl Node {
                 if let Some((cluster, _side)) =
                     Cluster::from_point_exact(layout, x * scale, y * scale)
                 {
-                    let style_index = cluster.glyphs().next()?.style_index();
-                    let node_id = layout.styles()[style_index].brush.id;
+                    let node_id = cluster.style().brush.id;
                     let text_pointer_events_none = self
                         .with(node_id)
                         .primary_styles()
@@ -1517,14 +1664,22 @@ impl Node {
         Some(offset)
     }
 
+    /// The node whose box this node's `Layout.location` is relative to: the
+    /// `oof_containing_block` for a hoisted out-of-flow box, otherwise the
+    /// `layout_parent`.
+    pub fn containing_block(&self) -> Option<NodeId> {
+        self.oof_containing_block
+            .get()
+            .or_else(|| self.layout_parent.get())
+    }
+
     /// Computes the Document-relative coordinates of the `Node`
     pub fn absolute_position(&self, x: f32, y: f32) -> crate::util::Point<f32> {
         let x = x + self.final_layout().location.x - self.scroll_offset().x as f32;
         let y = y + self.final_layout().location.y - self.scroll_offset().y as f32;
 
-        // Recurse up the layout hierarchy
-        self.layout_parent
-            .get()
+        // Recurse up the positioning hierarchy
+        self.containing_block()
             .map(|i| self.with(i).absolute_position(x, y))
             .unwrap_or(crate::util::Point { x, y })
     }
@@ -1535,8 +1690,7 @@ impl Node {
         let x = x + self.unrounded_layout().location.x - self.scroll_offset().x as f32;
         let y = y + self.unrounded_layout().location.y - self.scroll_offset().y as f32;
 
-        self.layout_parent
-            .get()
+        self.containing_block()
             .map(|i| self.with(i).unrounded_absolute_position(x, y))
             .unwrap_or(crate::util::Point { x, y })
     }
@@ -1570,7 +1724,7 @@ impl Node {
     pub fn offset_parent(&self) -> Option<&Node> {
         let mut node = self;
         loop {
-            node = self.with(node.layout_parent.get()?);
+            node = self.with(node.containing_block()?);
             if node.is_offset_parent() {
                 return Some(node);
             }
@@ -1588,7 +1742,7 @@ impl Node {
             x += layout.location.x;
             y += layout.location.y;
 
-            let Some(parent_id) = current.layout_parent.get() else {
+            let Some(parent_id) = current.containing_block() else {
                 break;
             };
             let parent = self.with(parent_id);

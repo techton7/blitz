@@ -23,7 +23,9 @@ use thin_vec::ThinVec;
 use crate::{
     BaseDocument, ElementData, Node, NodeData,
     font_metrics::normal_line_height,
-    layout::damage::{CONSTRUCT_BOX, CONSTRUCT_DESCENDENT, CONSTRUCT_FC},
+    layout::damage::{
+        CONSTRUCT_BOX, CONSTRUCT_DESCENDENT, CONSTRUCT_FC, sort_layout_children_by_order,
+    },
     node::{
         ListItemLayout, ListItemLayoutPosition, Marker, NodeFlags, NodeKind, SpecialElementData,
         TextBrush, TextInputData, TextLayout,
@@ -94,7 +96,7 @@ impl LayoutChildren {
         fn block_is_only_whitespace(doc: &BaseDocument, node_id: NodeId) -> bool {
             for child_id in doc.nodes[node_id].children.iter().copied() {
                 let child = &doc.nodes[child_id];
-                if !child.is_whitespace_node() {
+                if !child.is_collapsible_whitespace_node() {
                     return false;
                 }
             }
@@ -265,7 +267,7 @@ fn push_hoisted_children_and_pseudos(
     let children = std::mem::take(&mut doc.nodes[container_node_id].children);
     for child_id in children.iter().copied() {
         let child = &doc.nodes[child_id];
-        if child.data.kind() == NodeKind::Comment || child.is_whitespace_node() {
+        if child.data.kind() == NodeKind::Comment || child.is_collapsible_whitespace_node() {
             continue;
         }
         push_hoisted_child(doc, child_id, out, wrap);
@@ -442,8 +444,8 @@ fn classify_flow_children(
                 .unwrap_or(PositionProperty::Static);
             let float = style.map(|s| s.clone_float()).unwrap_or(Float::None);
 
-            // Ignore nodes that are entirely whitespace
-            if child.is_whitespace_node() {
+            // Ignore nodes whose whitespace is entirely collapsed away
+            if child.is_collapsible_whitespace_node() {
                 continue;
             }
 
@@ -630,19 +632,22 @@ fn collect_layout_children_with_wrap(
                 });
 
             if !has_text_node_or_contents {
-                return push_non_whitespace_children_and_pseudos(
+                push_non_whitespace_children_and_pseudos(
                     &mut out.children,
                     &doc.nodes[container_node_id],
                 );
+            } else {
+                collect_complex_layout_children(
+                    doc,
+                    container_node_id,
+                    out,
+                    true,
+                    text_item_needs_wrap,
+                );
             }
 
-            collect_complex_layout_children(
-                doc,
-                container_node_id,
-                out,
-                true,
-                text_item_needs_wrap,
-            );
+            // Flex/grid items are laid out in order-modified document order.
+            sort_layout_children_by_order(&doc.nodes, &mut out.children);
         }
 
         DisplayInside::Table => {
@@ -939,12 +944,21 @@ fn create_text_editor(doc: &mut BaseDocument, input_element_id: NodeId, is_multi
         .as_ref()
         .map(|s| stylo_to_parley::style(node.id, s))
         .unwrap_or_default();
+    let alignment = node
+        .primary_styles()
+        .map(|s| stylo_to_parley::text_align(s.clone_text_align()))
+        .unwrap_or(parley::layout::Alignment::Start);
 
+    let initial_text = if is_multiline {
+        node.text_content()
+    } else {
+        node.attr(local_name!("value")).unwrap_or("").to_string()
+    };
     let element = &mut node.data.downcast_element_mut().unwrap();
     if !matches!(element.special_data, SpecialElementData::TextInput(_)) {
         let mut text_input_data = TextInputData::new(is_multiline);
         let editor = &mut text_input_data.editor;
-        editor.set_text(element.attr(local_name!("value")).unwrap_or(""));
+        editor.set_text(&initial_text);
         element.special_data = SpecialElementData::TextInput(text_input_data);
     }
 
@@ -958,9 +972,24 @@ fn create_text_editor(doc: &mut BaseDocument, input_element_id: NodeId, is_multi
 
     let styles = editor.edit_styles();
     styles.retain(|_| false);
+    styles.insert(StyleProperty::FontFamily(parley_style.font_family));
     styles.insert(StyleProperty::FontSize(parley_style.font_size));
+    styles.insert(StyleProperty::FontWidth(parley_style.font_width));
+    styles.insert(StyleProperty::FontStyle(parley_style.font_style));
+    styles.insert(StyleProperty::FontWeight(parley_style.font_weight));
+    styles.insert(StyleProperty::FontVariations(parley_style.font_variations));
+    styles.insert(StyleProperty::FontFeatures(parley_style.font_features));
     styles.insert(StyleProperty::LineHeight(parley_style.line_height));
+    styles.insert(StyleProperty::WordSpacing(parley_style.word_spacing));
+    styles.insert(StyleProperty::LetterSpacing(parley_style.letter_spacing));
+    styles.insert(StyleProperty::WordBreak(parley_style.word_break));
+    styles.insert(StyleProperty::OverflowWrap(parley_style.overflow_wrap));
+    styles.insert(StyleProperty::TextWrapMode(parley_style.text_wrap_mode));
+    styles.insert(StyleProperty::WhiteSpaceCollapse(
+        parley_style.white_space_collapse,
+    ));
     styles.insert(StyleProperty::Brush(parley_style.brush));
+    editor.set_alignment(alignment);
 
     editor.refresh_layout(&mut doc.font_ctx.lock().unwrap(), &mut doc.layout_ctx);
 }
@@ -1105,7 +1134,10 @@ pub(crate) fn build_inline_layout_into(
     let mut parley_style = root_node_style
         .as_ref()
         .map(|s| stylo_to_parley::style(inline_context_root_node_id, s))
-        .unwrap_or_default();
+        .unwrap_or_else(|| parley::TextStyle {
+            white_space_collapse: WhiteSpaceCollapse::Collapse,
+            ..Default::default()
+        });
 
     // The line-height of the inline context's root (the "strut"). `normal` is resolved
     // against the root's first available font rather than per-run by Parley, so that
@@ -1130,14 +1162,12 @@ pub(crate) fn build_inline_layout_into(
 
     // Create a parley tree builder
     let mut builder = layout_ctx.tree_builder(font_ctx, scale, true, &parley_style);
-
-    // Set whitespace collapsing mode
-    let collapse_mode = root_node_style
-        .as_ref()
-        .map(|s| s.get_inherited_text().white_space_collapse)
-        .map(stylo_to_parley::white_space_collapse)
-        .unwrap_or(WhiteSpaceCollapse::Collapse);
-    builder.set_white_space_mode(collapse_mode);
+    if let Some(style) = root_node_style.as_deref() {
+        builder.set_base_direction(stylo_to_parley::base_direction(
+            style.clone_direction(),
+            style.clone_unicode_bidi(),
+        ));
+    }
 
     let text_transform = root_node_style
         .as_ref()
@@ -1172,9 +1202,7 @@ pub(crate) fn build_inline_layout_into(
         build_inline_layout_recursive(
             &mut builder,
             nodes,
-            inline_context_root_node_id,
             before_id,
-            collapse_mode,
             text_transform,
             &span_line_heights,
         );
@@ -1183,9 +1211,7 @@ pub(crate) fn build_inline_layout_into(
         build_inline_layout_recursive(
             &mut builder,
             nodes,
-            inline_context_root_node_id,
             child_id,
-            collapse_mode,
             text_transform,
             &span_line_heights,
         );
@@ -1194,9 +1220,7 @@ pub(crate) fn build_inline_layout_into(
         build_inline_layout_recursive(
             &mut builder,
             nodes,
-            inline_context_root_node_id,
             after_id,
-            collapse_mode,
             text_transform,
             &span_line_heights,
         );
@@ -1208,26 +1232,14 @@ pub(crate) fn build_inline_layout_into(
     fn build_inline_layout_recursive(
         builder: &mut TreeBuilder<TextBrush>,
         nodes: &crate::NodeTree,
-        parent_id: NodeId,
         node_id: NodeId,
-        collapse_mode: WhiteSpaceCollapse,
         parent_text_transform: TextTransform,
         span_line_heights: &HashMap<NodeId, f32>,
     ) {
         let node = &nodes[node_id];
 
-        // Set layout_parent for node.
-        node.layout_parent.set(Some(parent_id));
-
         let style = node.primary_styles();
         let style = style.as_ref();
-
-        // Set whitespace collapsing mode
-        let collapse_mode = style
-            .map(|s| s.clone_white_space_collapse())
-            .map(stylo_to_parley::white_space_collapse)
-            .unwrap_or(collapse_mode);
-        builder.set_white_space_mode(collapse_mode);
 
         let text_transform = style
             .map(|s| s.clone_text_transform() & TextTransform::CASE_TRANSFORMS)
@@ -1260,18 +1272,34 @@ pub(crate) fn build_inline_layout_into(
                         // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                     }
                     (DisplayOutside::None, DisplayInside::Contents) => {
+                        let whitespace = style.map(|s| {
+                            [
+                                parley::StyleProperty::WhiteSpaceCollapse(
+                                    stylo_to_parley::white_space_collapse(
+                                        s.clone_white_space_collapse(),
+                                    ),
+                                ),
+                                parley::StyleProperty::TextWrapMode(
+                                    stylo_to_parley::text_wrap_mode(s.clone_text_wrap_mode()),
+                                ),
+                            ]
+                        });
+                        builder.push_style_modification_span(
+                            whitespace
+                                .as_ref()
+                                .map_or(&[][..], |styles| styles.as_slice()),
+                        );
                         for child_id in node.children.iter().copied() {
                             // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                             build_inline_layout_recursive(
                                 builder,
                                 nodes,
-                                parent_id,
                                 child_id,
-                                collapse_mode,
                                 text_transform,
                                 span_line_heights,
                             );
                         }
+                        builder.pop_style_span();
                     }
                     (DisplayOutside::Inline, DisplayInside::Flow) => {
                         let tag_name = &element_data.name.local;
@@ -1289,21 +1317,27 @@ pub(crate) fn build_inline_layout_into(
                                 // Width and height are set during layout
                                 width: 0.0,
                                 height: 0.0,
+                                baseline: None,
                             });
                         } else if *tag_name == local_name!("br") {
                             // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                             // TODO: update span id for br spans
-                            builder.push_style_modification_span(&[]);
-                            builder.set_white_space_mode(WhiteSpaceCollapse::Preserve);
+                            builder.push_style_modification_span(&[
+                                parley::StyleProperty::WhiteSpaceCollapse(
+                                    WhiteSpaceCollapse::Preserve,
+                                ),
+                            ]);
                             builder.push_text("\n");
                             builder.pop_style_span();
-                            builder.set_white_space_mode(collapse_mode);
                         } else {
                             // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                             let mut style = node
                                 .primary_styles()
                                 .map(|s| stylo_to_parley::style(node.id, &s))
-                                .unwrap_or_default();
+                                .unwrap_or_else(|| parley::TextStyle {
+                                    white_space_collapse: WhiteSpaceCollapse::Collapse,
+                                    ..Default::default()
+                                });
 
                             // Floor the line-height of the span by the line-height of the inline context
                             // See https://www.w3.org/TR/CSS21/visudet.html#line-height
@@ -1320,9 +1354,7 @@ pub(crate) fn build_inline_layout_into(
                                 build_inline_layout_recursive(
                                     builder,
                                     nodes,
-                                    node_id,
                                     before_id,
-                                    collapse_mode,
                                     text_transform,
                                     span_line_heights,
                                 );
@@ -1332,9 +1364,7 @@ pub(crate) fn build_inline_layout_into(
                                 build_inline_layout_recursive(
                                     builder,
                                     nodes,
-                                    node_id,
                                     child_id,
-                                    collapse_mode,
                                     text_transform,
                                     span_line_heights,
                                 );
@@ -1343,9 +1373,7 @@ pub(crate) fn build_inline_layout_into(
                                 build_inline_layout_recursive(
                                     builder,
                                     nodes,
-                                    node_id,
                                     after_id,
-                                    collapse_mode,
                                     text_transform,
                                     span_line_heights,
                                 );
@@ -1364,6 +1392,7 @@ pub(crate) fn build_inline_layout_into(
                             // Width and height are set during layout
                             width: 0.0,
                             height: 0.0,
+                            baseline: None,
                         });
                     }
                 };

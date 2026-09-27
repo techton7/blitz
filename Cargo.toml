@@ -53,7 +53,7 @@ stylo_taffy = { version = "=0.3.0-beta.2", path = "./packages/stylo_taffy", defa
 dioxus-native = { version = "0.7.0", path = "./packages/dioxus-native", default-features = false }
 dioxus-native-dom = { version = "0.7.0", path = "./packages/dioxus-native-dom", default-features = false }
 debug_timer = { version = "0.1.2", path = "./packages/debug_timer" }
-accesskit_xplat = { version = "0.1", path = "./packages/accesskit_xplat", default-features = false }
+accesskit_xplat = { version = "0.2", path = "./packages/accesskit_xplat", default-features = false }
 browser-persistence = { path = "./apps/browser/persistence" }
 blitz-test-harness = { path = "./packages/blitz-test-harness" }
 
@@ -98,7 +98,7 @@ dioxus-cli-config = { version = "0.7.3" }
 dioxus-core-macro = { version = "0.7.3" }
 
 # Taffy + Parley + Fontations
-taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "c17b313cd1be5a4def91522cf3ea5995e664ebf7", default-features = false, features = [
+taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "4863877b9cab21645b160d7f247901f90214fe27", default-features = false, features = [
     "std",
     "flexbox",
     "grid",
@@ -107,7 +107,7 @@ taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "c17b313cd1be5a4def
     "calc",
     "detailed_layout_info",
 ] }
-parley = { version = "0.11.1", default-features = false, features = ["std"] }
+parley = { git = "https://github.com/linebender/parley", rev = "6a9444f402b2c8698cf0c28dcd7ea8b469688f16", default-features = false, features = ["std"] }
 skrifa = { version = "0.44", default-features = false, features = [
     "std",
 ] } # Should match parley and vello versions
@@ -134,7 +134,7 @@ svgtypes = "0.16.1" # Should match usvg's version
 # Windowing & Input
 raw-window-handle = "0.6.0"
 winit = { version = "=0.31.0-beta.3" }
-accesskit = "0.24"
+accesskit = "0.25"
 arboard = { version = "3.4.1", default-features = false }
 rfd = { version = "0.17.1", default-features = false }
 keyboard-types = "0.7"

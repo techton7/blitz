@@ -1011,9 +1011,10 @@ impl ElementCx<'_, '_> {
 
         if let Some(hoisted) = &self.node.stacking_context {
             for hoisted_child in hoisted.neg_z_hoisted_children() {
+                let position = hoisted_child.position(self.node.tree(), self.node.id);
                 let pos = kurbo::Vec2 {
-                    x: hoisted_child.position.x as f64 * self.scale,
-                    y: hoisted_child.position.y as f64 * self.scale,
+                    x: position.x as f64 * self.scale,
+                    y: position.y as f64 * self.scale,
                 };
                 self.render_node(
                     scene,
@@ -1027,16 +1028,33 @@ impl ElementCx<'_, '_> {
         // Regular children
         if let Some(children) = &*self.node.paint_children.borrow() {
             for child_id in children {
-                self.render_node(scene, *child_id, parent_style_transform, clip_rect);
+                // Fixed-position children of the root element are positioned against
+                // the viewport and do not scroll with it, so cancel out the viewport
+                // scroll (applied in `paint_scene`). A fixed box contained by a
+                // transformed ancestor scrolls with it like any out-of-flow box.
+                let child = &self.context.dom.as_ref().tree()[*child_id];
+                let child_transform = if child.taffy_position() == taffy::Position::Fixed
+                    && Some(self.node.id) == self.context.root_element_id
+                {
+                    let scroll = self.context.dom.as_ref().viewport_scroll();
+                    parent_style_transform.pre_translate(kurbo::Vec2 {
+                        x: scroll.x * self.scale,
+                        y: scroll.y * self.scale,
+                    })
+                } else {
+                    parent_style_transform
+                };
+                self.render_node(scene, *child_id, child_transform, clip_rect);
             }
         }
 
         // Positive z_index hoisted nodes
         if let Some(hoisted) = &self.node.stacking_context {
             for hoisted_child in hoisted.pos_z_hoisted_children() {
+                let position = hoisted_child.position(self.node.tree(), self.node.id);
                 let pos = kurbo::Vec2 {
-                    x: hoisted_child.position.x as f64 * self.scale,
-                    y: hoisted_child.position.y as f64 * self.scale,
+                    x: position.x as f64 * self.scale,
+                    y: position.y as f64 * self.scale,
                 };
                 self.render_node(
                     scene,

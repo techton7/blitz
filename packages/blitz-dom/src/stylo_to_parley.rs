@@ -8,9 +8,11 @@ use crate::node::TextBrush;
 
 // Module of type aliases so we can refer to stylo types with nicer names
 pub(crate) mod stylo {
+    pub(crate) use style::computed_values::direction::T as Direction;
     pub(crate) use style::computed_values::font_variant_caps::T as FontVariantCaps;
     pub(crate) use style::computed_values::font_variant_position::T as FontVariantPosition;
     pub(crate) use style::computed_values::text_wrap_mode::T as TextWrapMode;
+    pub(crate) use style::computed_values::unicode_bidi::T as UnicodeBidi;
     pub(crate) use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
     pub(crate) use style::properties::ComputedValues;
     pub(crate) use style::properties::style_structs::Font;
@@ -27,12 +29,15 @@ pub(crate) mod stylo {
     pub(crate) use style::values::computed::font::GenericFontFamily;
     pub(crate) use style::values::computed::font::LineHeight;
     pub(crate) use style::values::computed::font::SingleFontFamily;
+    pub(crate) use style::values::specified::TextAlignKeyword;
 }
 
 pub(crate) mod parley {
+    pub(crate) use parley::BaseDirection;
     pub(crate) use parley::FontFeature;
     pub(crate) use parley::FontVariation;
     pub(crate) use parley::fontique::QueryFamily;
+    pub(crate) use parley::layout::Alignment;
     pub(crate) use parley::setting::*;
     pub(crate) use parley::style::*;
 }
@@ -278,14 +283,47 @@ pub(crate) fn font_features(font_styles: &stylo::Font) -> Vec<parley::FontFeatur
     features
 }
 
+pub(crate) fn base_direction(
+    direction: stylo::Direction,
+    unicode_bidi: stylo::UnicodeBidi,
+) -> parley::BaseDirection {
+    if unicode_bidi == stylo::UnicodeBidi::Plaintext {
+        return parley::BaseDirection::Auto;
+    }
+    match direction {
+        stylo::Direction::Ltr => parley::BaseDirection::Ltr,
+        stylo::Direction::Rtl => parley::BaseDirection::Rtl,
+    }
+}
+
+pub(crate) fn text_align(input: stylo::TextAlignKeyword) -> parley::Alignment {
+    match input {
+        stylo::TextAlignKeyword::Start => parley::Alignment::Start,
+        stylo::TextAlignKeyword::Left => parley::Alignment::Left,
+        stylo::TextAlignKeyword::Right => parley::Alignment::Right,
+        stylo::TextAlignKeyword::Center => parley::Alignment::Center,
+        stylo::TextAlignKeyword::Justify => parley::Alignment::Justify,
+        stylo::TextAlignKeyword::End => parley::Alignment::End,
+        stylo::TextAlignKeyword::MozCenter => parley::Alignment::Center,
+        stylo::TextAlignKeyword::MozLeft => parley::Alignment::Left,
+        stylo::TextAlignKeyword::MozRight => parley::Alignment::Right,
+    }
+}
+
+pub(crate) fn text_wrap_mode(input: stylo::TextWrapMode) -> parley::TextWrapMode {
+    match input {
+        stylo::TextWrapMode::Wrap => parley::TextWrapMode::Wrap,
+        stylo::TextWrapMode::Nowrap => parley::TextWrapMode::NoWrap,
+    }
+}
+
 pub(crate) fn white_space_collapse(input: stylo::WhiteSpaceCollapse) -> parley::WhiteSpaceCollapse {
     match input {
         stylo::WhiteSpaceCollapse::Collapse => parley::WhiteSpaceCollapse::Collapse,
         stylo::WhiteSpaceCollapse::Preserve => parley::WhiteSpaceCollapse::Preserve,
 
-        // TODO: Implement PreserveBreaks and BreakSpaces modes
-        stylo::WhiteSpaceCollapse::PreserveBreaks => parley::WhiteSpaceCollapse::Preserve,
-        stylo::WhiteSpaceCollapse::BreakSpaces => parley::WhiteSpaceCollapse::Preserve,
+        stylo::WhiteSpaceCollapse::PreserveBreaks => parley::WhiteSpaceCollapse::PreserveBreaks,
+        stylo::WhiteSpaceCollapse::BreakSpaces => parley::WhiteSpaceCollapse::BreakSpaces,
     }
 }
 
@@ -367,10 +405,7 @@ pub(crate) fn style(
         stylo::OverflowWrap::BreakWord => parley::OverflowWrap::BreakWord,
         stylo::OverflowWrap::Anywhere => parley::OverflowWrap::Anywhere,
     };
-    let text_wrap_mode = match itext_styles.text_wrap_mode {
-        stylo::TextWrapMode::Wrap => parley::TextWrapMode::Wrap,
-        stylo::TextWrapMode::Nowrap => parley::TextWrapMode::NoWrap,
-    };
+    let text_wrap_mode = text_wrap_mode(itext_styles.text_wrap_mode);
 
     parley::TextStyle {
         // font_family: parley::FontFamily::Single(FontFamilyName::Generic(GenericFamily::SystemUi)),
@@ -381,11 +416,12 @@ pub(crate) fn style(
         font_weight,
         font_variations: parley::FontVariations::List(Cow::Owned(font_variations)),
         font_features: parley::FontFeatures::List(Cow::Owned(font_features)),
-        locale: Default::default(),
+        locale: parley::Language::parse(&font_styles._x_lang.0).ok(),
         line_height,
         word_spacing,
         letter_spacing,
         text_wrap_mode,
+        white_space_collapse: white_space_collapse(itext_styles.white_space_collapse),
         overflow_wrap,
         word_break,
 

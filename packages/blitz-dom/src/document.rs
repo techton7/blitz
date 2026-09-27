@@ -201,8 +201,6 @@ pub struct BaseDocument {
     pub(crate) devtool_settings: DevtoolSettings,
     // Viewport details such as the dimensions, HiDPI scale, and zoom factor,
     pub(crate) viewport: Viewport,
-    // Scroll within our viewport
-    pub(crate) viewport_scroll: crate::Point<f64>,
     /// CSS media type used to evaluate `@media` rules.
     pub(crate) media_type: MediaType,
     /// Changes to the stylist [`Device`] that have been requested since the
@@ -211,7 +209,9 @@ pub struct BaseDocument {
     pub(crate) pending_device_changes: DeviceChanges,
     /// Strategy for Stylo's style traversal during `resolve`.
     pub(crate) style_threading: StyleThreading,
-    /// Whether incremental layout is enabled for this document.
+    /// Whether incremental layout is enabled for this document. When disabled,
+    /// every node is treated as damaged on every `resolve`, so the same damage
+    /// pipeline reconstructs and relays out the whole tree.
     pub(crate) incremental_layout: bool,
     /// How deeply this document is nested within other documents
     /// (0 for a root document). Used to limit `<iframe>` nesting depth.
@@ -452,7 +452,6 @@ impl BaseDocument {
             incremental_layout: config.incremental.unwrap_or(true),
             subdocument_depth: config.subdocument_depth,
             devtool_settings: DevtoolSettings::default(),
-            viewport_scroll: crate::Point::ZERO,
             url: base_url,
             ua_stylesheets: HashMap::new(),
             nodes_to_stylesheet: BTreeMap::new(),
@@ -1857,8 +1856,8 @@ impl BaseDocument {
         // that `refresh_hover` can re-resolve hover state after layout or
         // scroll changes.
         self.last_client_pointer_position = Some(taffy::Point {
-            x: x - self.viewport_scroll.x as f32,
-            y: y - self.viewport_scroll.y as f32,
+            x: x - self.viewport_scroll().x as f32,
+            y: y - self.viewport_scroll().y as f32,
         });
 
         let (hit, hovered_scrollbar) = self.hit_with_scrollbar(x, y);
@@ -1967,8 +1966,8 @@ impl BaseDocument {
         let Some(pos) = self.last_client_pointer_position else {
             return false;
         };
-        let x = pos.x + self.viewport_scroll.x as f32;
-        let y = pos.y + self.viewport_scroll.y as f32;
+        let x = pos.x + self.viewport_scroll().x as f32;
+        let y = pos.y + self.viewport_scroll().y as f32;
         self.set_hover_to(x, y)
     }
 
@@ -2022,11 +2021,20 @@ impl BaseDocument {
     }
 
     /// Returns whether incremental layout is currently enabled for this document.
+    ///
+    /// Both modes run the same style → damage → box construction → layout
+    /// pipeline. In incremental mode only nodes carrying `RestyleDamage` (from
+    /// mutations or restyles) are reconstructed and have their layout caches
+    /// cleared; in non-incremental mode every node is marked damaged at the
+    /// start of each `resolve`, so everything is rebuilt each frame.
     pub fn incremental_layout(&self) -> bool {
         self.incremental_layout
     }
 
     /// Enables or disables incremental layout for this document.
+    ///
+    /// Disabling it does not switch to a separate code path: all nodes are
+    /// simply treated as damaged on every `resolve` (see [`Self::incremental_layout`]).
     pub fn set_incremental_layout(&mut self, enabled: bool) {
         self.incremental_layout = enabled;
     }
@@ -2234,11 +2242,11 @@ impl BaseDocument {
     }
 
     pub fn viewport_scroll(&self) -> crate::Point<f64> {
-        self.viewport_scroll
+        self.nodes.viewport_scroll()
     }
 
     pub fn set_viewport_scroll(&mut self, scroll: crate::Point<f64>) {
-        self.viewport_scroll = scroll;
+        self.nodes.set_viewport_scroll(scroll);
     }
 
     /// Find the node targeted by a URL fragment (the `#...` part of a URL).
@@ -2288,8 +2296,8 @@ impl BaseDocument {
         let pos = node.unrounded_absolute_position(0.0, 0.0);
 
         Some(BoundingRect {
-            x: snap_to_layout_unit(pos.x as f64 - self.viewport_scroll.x),
-            y: snap_to_layout_unit(pos.y as f64 - self.viewport_scroll.y),
+            x: snap_to_layout_unit(pos.x as f64 - self.viewport_scroll().x),
+            y: snap_to_layout_unit(pos.y as f64 - self.viewport_scroll().y),
             width: snap_to_layout_unit(node.unrounded_layout().size.width as f64),
             height: snap_to_layout_unit(node.unrounded_layout().size.height as f64),
         })
@@ -2352,10 +2360,10 @@ impl BaseDocument {
         let root_pos = inline_root.unrounded_absolute_position(0.0, 0.0);
         let origin_x = root_pos.x as f64
             + (root_layout.padding.left + root_layout.border.left) as f64
-            - self.viewport_scroll.x;
+            - self.viewport_scroll().x;
         let origin_y = root_pos.y as f64
             + (root_layout.padding.top + root_layout.border.top) as f64
-            - self.viewport_scroll.y;
+            - self.viewport_scroll().y;
 
         let mut rects: Vec<BoundingRect> = Vec::new();
         for line in layout.lines() {

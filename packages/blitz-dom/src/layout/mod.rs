@@ -14,15 +14,17 @@ use style::values::computed::CSSPixelLength;
 use style::values::computed::length_percentage::CalcLengthPercentage;
 use stylo_taffy::TaffyStyloStyle;
 use taffy::{
-    BlockContext, CoreStyle as _, FlexDirection, LayoutPartialTree, NodeId, ResolveOrZero,
-    RoundTree, TraversePartialTree, TraverseTree, compute_block_layout, compute_cached_layout,
-    compute_flexbox_layout, compute_grid_layout, compute_leaf_layout, prelude::*,
+    BlockContext, CoreStyle as _, DetailedLayoutInfo, FlexDirection, LayoutContainingBlock,
+    LayoutPartialTree, NodeId, ResolveOrZero, RoundTree, RunMode, TraversePartialTree,
+    TraverseTree, compute_block_layout, compute_cached_layout, compute_flexbox_layout,
+    compute_grid_layout, compute_leaf_layout, compute_oof_layout, prelude::*,
 };
 
 pub(crate) mod construct;
 pub(crate) mod damage;
 pub(crate) mod inline;
 pub(crate) mod list;
+pub(crate) mod paint_tree;
 pub(crate) mod replaced;
 pub(crate) mod table;
 
@@ -82,7 +84,23 @@ impl BaseDocument {
 }
 
 impl BaseDocument {
+    /// Run the node's layout algorithm, then lay out the out-of-flow (absolute/fixed)
+    /// boxes for which it is the containing block. Must be called inside the layout
+    /// cache wrapper so that cache hits do not re-run the out-of-flow pass.
     fn compute_child_layout_internal(
+        &mut self,
+        node_id: NodeId,
+        inputs: taffy::tree::LayoutInput,
+        block_ctx: Option<&mut BlockContext<'_>>,
+    ) -> taffy::tree::LayoutOutput {
+        let mut output = self.dispatch_child_layout(node_id, inputs, block_ctx);
+        if inputs.run_mode == RunMode::PerformLayout {
+            compute_oof_layout(self, node_id, &mut output);
+        }
+        output
+    }
+
+    fn dispatch_child_layout(
         &mut self,
         node_id: NodeId,
         inputs: taffy::tree::LayoutInput,
@@ -151,7 +169,7 @@ impl BaseDocument {
                         .attr(local_name!("cols"))
                         .and_then(|val| val.parse::<f32>().ok());
 
-                    return compute_leaf_layout(
+                    let output = compute_leaf_layout(
                         inputs,
                         &node.layout_style(),
                         resolve_calc_value,
@@ -162,6 +180,32 @@ impl BaseDocument {
                             height: resolved_line_height.unwrap_or(16.0) * rows,
                         },
                     );
+                    if inputs.run_mode == RunMode::PerformLayout {
+                        let pb = {
+                            let style = node.layout_style();
+                            style
+                                .padding()
+                                .resolve_or_zero(inputs.parent_size.width, resolve_calc_value)
+                                + style
+                                    .border()
+                                    .resolve_or_zero(inputs.parent_size.width, resolve_calc_value)
+                        };
+                        let content_width = (output.size.width - pb.horizontal_axis_sum()).max(0.0);
+                        let scale = self.viewport.scale();
+                        let node = &mut self.nodes[dom_node_id(node_id)];
+                        if let Some(input) = node
+                            .data
+                            .downcast_element_mut()
+                            .and_then(|el| el.text_input_data_mut())
+                        {
+                            input.editor.set_width(Some(content_width * scale));
+                            input.editor.refresh_layout(
+                                &mut self.font_ctx.lock().unwrap(),
+                                &mut self.layout_ctx,
+                            );
+                        }
+                    }
+                    return output;
                 }
 
                 if *element_data.name.local == *"input" {
@@ -435,6 +479,52 @@ impl LayoutPartialTree for BaseDocument {
     }
 }
 
+impl LayoutContainingBlock for BaseDocument {
+    type OofItemStyle<'a>
+        = TaffyStyloStyle<ComputedStyleRef<'a>>
+    where
+        Self: 'a;
+
+    fn get_oof_item_style(&self, node_id: NodeId) -> Self::OofItemStyle<'_> {
+        self.node_from_id(node_id).layout_style()
+    }
+
+    fn clear_hoisted_children(&mut self, node_id: NodeId) {
+        let containing_block = dom_node_id(node_id);
+        let mut hoisted = self.node_from_id(node_id).hoisted_children.borrow_mut();
+        for &hoisted_id in hoisted.iter() {
+            // A box which has since been claimed by another containing block
+            // must keep pointing at that one.
+            if let Some(node) = self.nodes.get(hoisted_id) {
+                if node.oof_containing_block.get() == Some(containing_block) {
+                    node.oof_containing_block.set(None);
+                }
+            }
+        }
+        hoisted.clear();
+    }
+
+    fn add_hoisted_children(&mut self, node_id: NodeId, hoisted: &[NodeId]) {
+        let containing_block = dom_node_id(node_id);
+        let node = self.node_from_id(node_id);
+        node.hoisted_children
+            .borrow_mut()
+            .extend(hoisted.iter().copied().map(dom_node_id));
+        for &hoisted_id in hoisted {
+            self.node_from_id(hoisted_id)
+                .oof_containing_block
+                .set(Some(containing_block));
+        }
+    }
+
+    fn get_detailed_layout_info(&self, node_id: NodeId) -> &DetailedLayoutInfo<Atom> {
+        self.node_from_id(node_id)
+            .element_data()
+            .map(|element| &element.detailed_layout_info)
+            .unwrap_or(&DetailedLayoutInfo::None)
+    }
+}
+
 impl taffy::CacheTree for BaseDocument {
     #[inline]
     fn cache_get(
@@ -544,7 +634,7 @@ impl taffy::LayoutGridContainer for BaseDocument {
     ) {
         let node = self.node_from_id_mut(node_id);
         if let Some(element) = node.element_data_mut() {
-            element.detailed_grid_info = Some(Box::new(detailed_grid_info));
+            element.detailed_layout_info = DetailedLayoutInfo::Grid(Box::new(detailed_grid_info));
         }
     }
 }
@@ -556,6 +646,18 @@ impl RoundTree for BaseDocument {
 
     fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout) {
         *self.node_from_id_mut(node_id).final_layout_mut() = *layout;
+    }
+
+    fn is_out_of_flow(&self, node_id: NodeId) -> bool {
+        self.node_from_id(node_id).is_out_of_flow()
+    }
+
+    fn hoisted_child_count(&self, node_id: NodeId) -> usize {
+        self.node_from_id(node_id).hoisted_children.borrow().len()
+    }
+
+    fn get_hoisted_child_id(&self, node_id: NodeId, index: usize) -> NodeId {
+        taffy_node_id(self.node_from_id(node_id).hoisted_children.borrow()[index])
     }
 }
 
