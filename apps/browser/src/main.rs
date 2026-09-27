@@ -70,6 +70,10 @@ fn parse_cli_url(s: &str) -> Option<Url> {
 }
 
 fn main() {
+    // Windows backend policy (DX12-first with Vulkan fallback) is now implemented
+    // natively at the graphics context seam (wgpu_context / anyrender_vello_hybrid),
+    // respecting explicit WGPU_BACKEND overrides when provided.
+
     #[cfg(feature = "tracing")]
     tracing_subscriber::fmt::init();
 
@@ -94,7 +98,14 @@ fn main() {
             Box::new(initial_url_ctx.clone()) as Box<dyn std::any::Any>
         })];
 
-    dioxus_native::launch_cfg(app, contexts, vec![Box::new(window_attributes)])
+    let config = dioxus_native::Config::default()
+        .with_alpha_mode(anyrender::CompositeAlphaMode::Opaque);
+
+    dioxus_native::launch_cfg(
+        app,
+        contexts,
+        vec![Box::new(window_attributes), Box::new(config)],
+    )
 }
 
 fn app() -> Element {

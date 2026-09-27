@@ -65,8 +65,10 @@ impl LayerManager {
 
         // Actually push the layer
         if opacity == 1.0 && filter.is_none() && backdrop_filter.is_none() {
+            blitz_traits::probe!("blitz-paint::layers", "push_clip_layer bbox={:?}", shape.bounding_box());
             scene.push_clip_layer(transform, shape);
         } else {
+            blitz_traits::probe!("blitz-paint::layers", "push_layer opacity={}, bbox={:?}", opacity, shape.bounding_box());
             scene.push_layer(
                 Mix::Normal,
                 opacity,
@@ -87,6 +89,7 @@ impl LayerManager {
 
     pub(crate) fn maybe_pop_layer(&self, scene: &mut impl PaintScene, condition: bool) {
         if condition {
+            blitz_traits::probe!("blitz-paint::layers", "pop_layer depth_before={}", self.layer_depth.get());
             scene.pop_layer();
             self.layer_depth.update(|x| x - 1);
         }

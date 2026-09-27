@@ -37,10 +37,11 @@ use crate::{
 impl BaseDocument {
     /// Restyle the tree and then relayout it
     pub fn resolve(&mut self, current_time_for_animations: f64) {
-        if TDocument::as_node(&self.root_node())
+        let has_no_dom = TDocument::as_node(&self.root_node())
             .first_element_child()
-            .is_none()
-        {
+            .is_none();
+        if has_no_dom {
+            blitz_traits::probe!("blitz-dom::resolve", "early_return=true (no DOM / first_element_child is None)");
             #[cfg(feature = "tracing")]
             tracing::warn!("No DOM - not resolving");
             return;
@@ -59,8 +60,14 @@ impl BaseDocument {
         // `handle_messages` above must still run so that loaded resources are ingested and
         // this state can clear.
         if self.has_pending_critical_resources() {
+            blitz_traits::probe!(
+                "blitz-dom::resolve",
+                "early_return=true (has_pending_critical_resources, pending_count={})",
+                self.pending_critical_resources.len()
+            );
             return;
         }
+        blitz_traits::probe!("blitz-dom::resolve", "proceeding with normal style and layout resolution (pending_count={})", self.pending_critical_resources.len());
 
         self.resolve_scroll_animation();
 

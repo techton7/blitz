@@ -1073,6 +1073,25 @@ impl BaseDocument {
     }
 
     pub(crate) fn resolve_url(&self, raw: &str) -> url::Url {
+        #[cfg(windows)]
+        {
+            let path = std::path::Path::new(raw);
+            if path.is_absolute() {
+                if let Ok(file_url) = url::Url::from_file_path(path) {
+                    return file_url;
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let path = std::path::Path::new(raw);
+            if path.is_absolute() && self.url.scheme() == "file" {
+                if let Ok(file_url) = url::Url::from_file_path(path) {
+                    return file_url;
+                }
+            }
+        }
+
         self.url.resolve_relative(raw).unwrap_or_else(|| {
             panic!(
                 "to be able to resolve {raw} with the base_url: {:?}",
@@ -1256,7 +1275,18 @@ impl BaseDocument {
     }
 
     pub fn load_resource(&mut self, res: ResourceLoadResponse) {
-        self.pending_critical_resources.remove(&res.request_id);
+        let is_ok = res.result.is_ok();
+        let was_pending = self.pending_critical_resources.remove(&res.request_id);
+
+        blitz_traits::probe!(
+            "blitz-dom::load_resource",
+            "request_id={}, resolved_url={:?}, is_ok={}, was_pending={}, remaining_pending={}",
+            res.request_id,
+            res.resolved_url,
+            is_ok,
+            was_pending,
+            self.pending_critical_resources.len()
+        );
 
         let resource = match res.result {
             Ok(resource) => resource,

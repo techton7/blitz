@@ -9465,8 +9465,7 @@ dependencies = [
 [[package]]
 name = "wgpu_context"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d6c2553d5b114dfd941fa3372c7df1e1cde7bd81800e89aa13b7e3af2e4be9b"
+source = "git+https://github.com/techton7/anyrender?tag=wgpu_context-v0.9.1-win-policy#dda945f994d4205f1ae14923efa8c61dd30d1ddb"
 dependencies = [
  "futures-intrusive",
  "wgpu",

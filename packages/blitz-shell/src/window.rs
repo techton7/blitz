@@ -418,8 +418,20 @@ impl<Rend: WindowRenderer> View<Rend> {
         let is_blocked = inner.has_pending_critical_resources();
         let insets = self.safe_area_insets;
 
+        blitz_traits::probe!(
+            "blitz-shell::redraw",
+            "is_visible={}, is_blocked={}, window_size=({}x{}), render_skipped={}",
+            is_visible,
+            is_blocked,
+            width,
+            height,
+            is_blocked || !is_visible
+        );
+
         if !is_blocked && is_visible {
+            blitz_traits::probe!("blitz-shell::redraw", "calling self.renderer.render");
             self.renderer.render(|scene| {
+                blitz_traits::probe!("blitz-shell::redraw", "inside render closure, calling paint_scene");
                 paint_scene(
                     scene,
                     &mut inner,
@@ -428,15 +440,20 @@ impl<Rend: WindowRenderer> View<Rend> {
                     height,
                     insets.left,
                     insets.top,
-                )
+                );
+                blitz_traits::probe!("blitz-shell::redraw", "paint_scene returned");
             });
+            blitz_traits::probe!("blitz-shell::redraw", "self.renderer.render returned");
         }
 
+        blitz_traits::probe!("blitz-shell::redraw", "about to drop inner");
         drop(inner);
+        blitz_traits::probe!("blitz-shell::redraw", "inner dropped, is_animating={}", is_animating);
 
         if !is_blocked && is_visible && is_animating {
             self.request_redraw();
         }
+        blitz_traits::probe!("blitz-shell::redraw", "View::redraw completed");
     }
 
     pub fn pointer_coords(&self, position: PhysicalPosition<f64>) -> PointerCoords {

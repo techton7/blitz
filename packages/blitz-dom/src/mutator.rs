@@ -1102,11 +1102,22 @@ impl<'doc> DocumentMutator<'doc> {
             },
         );
 
-        if is_in_head && !self.doc.net_provider.is_noop() {
+        let is_critical = is_in_head && !self.doc.net_provider.is_noop();
+        if is_critical {
             self.doc
                 .pending_critical_resources
                 .insert(handler.request_id());
         }
+
+        blitz_traits::probe!(
+            "blitz-dom::mutator",
+            "stylesheet request: id={}, href='{}', resolved_url='{}', is_critical={}, pending_count={}",
+            handler.request_id(),
+            href,
+            url.as_str(),
+            is_critical,
+            self.doc.pending_critical_resources.len()
+        );
 
         self.doc.net_provider.fetch(
             self.doc.id(),

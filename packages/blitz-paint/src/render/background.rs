@@ -292,6 +292,15 @@ impl ElementCx<'_, '_> {
             .resolve_to_absolute(&current_color)
             .as_srgb_color();
 
+        blitz_traits::probe!(
+            "blitz-paint::draw_solid_bg",
+            "node_id={:?}, tag={}, bg_color={:?}, bbox={:?}",
+            self.node.id,
+            self.element.name.local,
+            bg_color,
+            shape.bounding_box()
+        );
+
         if bg_color != Color::TRANSPARENT {
             // Fill the color
             scene.fill(Fill::NonZero, self.transform, bg_color, None, shape);

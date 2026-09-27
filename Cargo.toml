@@ -303,7 +303,8 @@ rustc-hash = { workspace = true }
 # vello_common = { path = "../vello/sparse_strips/vello_common" }
 # glifo = { path = "../vello/glifo" }
 
-# [patch.crates-io]
+[patch.crates-io]
+wgpu_context = { git = "https://github.com/techton7/anyrender", tag = "wgpu_context-v0.9.1-win-policy" }
 # style = { path = "../stylo/style", package = "stylo" }
 # style_traits = { path = "../stylo/style_traits", package = "stylo_traits" }
 # style_atoms = { path = "../stylo/stylo_atoms", package = "stylo_atoms" }
