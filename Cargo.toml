@@ -58,18 +58,18 @@ browser-persistence = { path = "./apps/browser/persistence" }
 blitz-test-harness = { path = "./packages/blitz-test-harness" }
 
 # Servo dependencies
-style = { version = "0.21.0", package = "stylo" }
-style_traits = { version = "0.21.0", package = "stylo_traits" }
-style_atoms = { version = "0.21.0", package = "stylo_atoms" }
-style_config = { version = "0.21.0", package = "stylo_static_prefs" }
-style_dom = { version = "0.21.0", package = "stylo_dom" }
-selectors = { version = "0.40.0", package = "selectors" }
-cssparser = { version = "0.37.0" }
+style = { version = "0.22.0", package = "stylo" }
+style_traits = { version = "0.22.0", package = "stylo_traits" }
+style_atoms = { version = "0.22.0", package = "stylo_atoms" }
+style_config = { version = "0.22.0", package = "stylo_static_prefs" }
+style_dom = { version = "0.22.0", package = "stylo_dom" }
+selectors = { version = "0.41.0", package = "selectors" }
+cssparser = { version = "0.38.0" }
 
 # HTML5ever dependencies
-markup5ever = "0.39.0" # needs to match stylo web_atoms version
-html5ever = "0.39.0"   # needs to match stylo web_atoms version
-xml5ever = "0.39.0"    # needs to match stylo web_atoms version
+markup5ever = "0.40.0" # needs to match stylo web_atoms version
+html5ever = "0.40.1"   # needs to match stylo web_atoms version
+xml5ever = "0.40.0"    # needs to match stylo web_atoms version
 
 # Other Servo dependencies
 euclid = "0.22"
@@ -98,36 +98,37 @@ dioxus-cli-config = { version = "0.7.3" }
 dioxus-core-macro = { version = "0.7.3" }
 
 # Taffy + Parley + Fontations
-taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "4863877b9cab21645b160d7f247901f90214fe27", default-features = false, features = [
+taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "4142c9d8cac05d8b39eac9632856ed04f7623d52", default-features = false, features = [
     "std",
     "flexbox",
+    "flexbox_balance",
     "grid",
     "block_layout",
     "content_size",
     "calc",
     "detailed_layout_info",
 ] }
-parley = { git = "https://github.com/linebender/parley", rev = "6a9444f402b2c8698cf0c28dcd7ea8b469688f16", default-features = false, features = ["std"] }
+parley = { git = "https://github.com/linebender/parley", rev = "e41dfea5cf50669ac67c5a8aca8d1664ffb72904", default-features = false, features = ["std"] }
 skrifa = { version = "0.44", default-features = false, features = [
     "std",
 ] } # Should match parley and vello versions
 
 # AnyRender
-anyrender = { version = "0.13.0" }
-anyrender_serialize = { version = "0.7.0" }
-anyrender_skia = { version = "0.11.0" }
-anyrender_vello = { version = "0.14.0" }
-anyrender_vello_cpu = { version = "0.17.0" }
-anyrender_vello_hybrid = { version = "0.10.0" }
-anyrender_svg = { version = "0.14.0" }
-wgpu_context = { version = "0.9.0" }
+anyrender = { version = "0.14.0" }
+anyrender_serialize = { version = "0.8.0" }
+anyrender_skia = { version = "0.12.0" }
+anyrender_vello = { version = "0.15.0" }
+anyrender_vello_cpu = { version = "0.18.0" }
+anyrender_vello_hybrid = { version = "0.11.0" }
+anyrender_svg = { version = "0.15.0" }
+wgpu_context = { version = "0.10.0" }
 
 # Linebender + Fontations + WGPU + SVG
 color = "0.3"
 linebender_resource_handle = "0.1"
 peniko = "0.6.0"
 kurbo = "0.13.1"
-wgpu = "29"
+wgpu = "30"
 usvg = "0.48.1"
 svgtypes = "0.16.1" # Should match usvg's version
 
@@ -280,10 +281,10 @@ peniko = { workspace = true }
 color = { workspace = true }
 env_logger = "0.11"
 tracing-subscriber = "0.3"
-vello = "0.10"
-vello_cpu = "0.1"
-vello_hybrid = "0.1"
-vello_common = "0.1"
+vello = "0.11"
+vello_cpu = "0.3"
+vello_gpu = "0.3"
+vello_common = "0.3"
 wgpu = { workspace = true }
 wgpu_context = { workspace = true }
 rustc-hash = { workspace = true }
@@ -299,7 +300,7 @@ rustc-hash = { workspace = true }
 
 # vello = { path = "../vello/vello" }
 # vello_cpu = { path = "../vello/sparse_strips/vello_cpu" }
-# vello_hybrid = { path = "../vello/sparse_strips/vello_hybrid" }
+# vello_gpu = { path = "../vello/sparse_strips/vello_gpu" }
 # vello_common = { path = "../vello/sparse_strips/vello_common" }
 # glifo = { path = "../vello/glifo" }
 

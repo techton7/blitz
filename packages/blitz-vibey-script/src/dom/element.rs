@@ -94,6 +94,14 @@ pub(crate) fn init_element_proto(proto: &JsObject, context: &mut Context) {
         context,
     );
     define_accessor(proto, "outerHTML", Some(get_outer_html), None, context);
+    // Approximated with `textContent` semantics (no rendered-text processing)
+    define_accessor(
+        proto,
+        "innerText",
+        Some(super::node::text_content),
+        Some(super::node::set_text_content),
+        context,
+    );
     define_accessor(proto, "content", Some(get_content), None, context);
     define_accessor(proto, "children", Some(children), None, context);
     define_accessor(
@@ -300,7 +308,7 @@ pub(crate) fn element_child_ids(doc: &blitz_dom::BaseDocument, node_id: NodeId) 
         .unwrap_or_default()
 }
 
-fn children(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+pub(crate) fn children(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let ctx = dom_ctx(context)?;
     let node_id = this_node_id(this)?;
     let child_ids = element_child_ids(&ctx.doc.borrow(), node_id);
@@ -538,9 +546,19 @@ fn set_checked(this: &JsValue, args: &[JsValue], context: &mut Context) -> JsRes
     Ok(JsValue::undefined())
 }
 
+/// `HTMLStyleElement.disabled` / `HTMLLinkElement.disabled` control the
+/// disabled flag of the element's associated stylesheet rather than (only) a
+/// content attribute.
+fn is_stylesheet_owner_tag(tag: &LocalName) -> bool {
+    matches!(&**tag, "style" | "link")
+}
+
 fn get_disabled(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let ctx = dom_ctx(context)?;
     let node_id = this_node_id(this)?;
+    if element_local_name(&ctx, node_id).is_some_and(|tag| is_stylesheet_owner_tag(&tag)) {
+        return Ok(JsValue::from(ctx.doc.borrow().stylesheet_disabled(node_id)));
+    }
     Ok(JsValue::from(
         read_attr(&ctx, node_id, "disabled").is_some(),
     ))
@@ -550,6 +568,16 @@ fn set_disabled(this: &JsValue, args: &[JsValue], context: &mut Context) -> JsRe
     let ctx = dom_ctx(context)?;
     let node_id = this_node_id(this)?;
     let disabled = args.first().map(JsValue::to_boolean).unwrap_or(false);
+    if let Some(tag) = element_local_name(&ctx, node_id) {
+        if is_stylesheet_owner_tag(&tag) {
+            ctx.doc
+                .borrow_mut()
+                .set_stylesheet_disabled(node_id, disabled);
+            if &*tag == "style" {
+                return Ok(JsValue::undefined());
+            }
+        }
+    }
     if disabled {
         write_attr(&ctx, node_id, "disabled", "");
     } else {
@@ -940,26 +968,37 @@ fn layout_value(
     Ok(JsValue::from(value as f64))
 }
 
+/// `offsetLeft`/`offsetTop`/`offsetWidth`/`offsetHeight`: the node's border box
+/// relative to the padding edge of its `offsetParent` (blitz-dom's `offset_rect`
+/// implements the offsetParent resolution and the fragment bounding box of
+/// non-atomic inline elements)
+fn offset_value(
+    this: &JsValue,
+    context: &mut Context,
+    f: impl FnOnce(&blitz_dom::BoundingRect) -> f64,
+) -> JsResult<JsValue> {
+    let ctx = dom_ctx(context)?;
+    let node_id = this_node_id(this)?;
+    let mut doc = ctx.doc.borrow_mut();
+    doc.resolve(0.0);
+    let value = doc.offset_rect(node_id).map(|rect| f(&rect)).unwrap_or(0.0);
+    Ok(JsValue::from(value.round()))
+}
+
 fn offset_width(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
-    layout_value(this, context, |node| node.final_layout().size.width.round())
+    offset_value(this, context, |rect| rect.width)
 }
 
 fn offset_height(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
-    layout_value(this, context, |node| {
-        node.final_layout().size.height.round()
-    })
+    offset_value(this, context, |rect| rect.height)
 }
 
-// `offsetLeft`/`offsetTop`: the position of the element's border edge relative
-// to the padding edge of its `offsetParent` (blitz-dom's `offset_top_left`
-// implements the offsetParent resolution)
-
 fn offset_left(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
-    layout_value(this, context, |node| node.offset_top_left().x.round())
+    offset_value(this, context, |rect| rect.x)
 }
 
 fn offset_top(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
-    layout_value(this, context, |node| node.offset_top_left().y.round())
+    offset_value(this, context, |rect| rect.y)
 }
 
 /// `clientWidth`/`clientHeight`. For the root element (in no-quirks mode, which

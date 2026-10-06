@@ -14,10 +14,11 @@ use style::values::computed::CSSPixelLength;
 use style::values::computed::length_percentage::CalcLengthPercentage;
 use stylo_taffy::TaffyStyloStyle;
 use taffy::{
-    BlockContext, CoreStyle as _, DetailedLayoutInfo, FlexDirection, LayoutContainingBlock,
-    LayoutPartialTree, NodeId, ResolveOrZero, RoundTree, RunMode, TraversePartialTree,
-    TraverseTree, compute_block_layout, compute_cached_layout, compute_flexbox_layout,
-    compute_grid_layout, compute_leaf_layout, compute_oof_layout, prelude::*,
+    AxisStaticEdge, AxisStaticPosition, BlockContext, CoreStyle as _, DetailedLayoutInfo,
+    FlexDirection, LayoutContainingBlock, LayoutPartialTree, MaybeMath as _, NodeId, OofCandidate,
+    ResolveOrZero, RoundTree, RunMode, TraversePartialTree, TraverseTree, compute_block_layout,
+    compute_cached_layout, compute_flexbox_layout, compute_grid_layout, compute_leaf_layout,
+    compute_oof_layout, prelude::*,
 };
 
 pub(crate) mod construct;
@@ -367,6 +368,24 @@ impl BaseDocument {
                 }
 
                 if node.flags.is_table_root() {
+                    // The space available to an absolutely positioned table never exceeds
+                    // the size of its containing block (less the table's margins), even
+                    // when negative insets would otherwise add to it
+                    // (https://drafts.csswg.org/css-tables-3/#abspos).
+                    let mut inputs = inputs;
+                    if self.nodes[dom_node_id(node_id)].is_out_of_flow() {
+                        let margin = self.nodes[dom_node_id(node_id)]
+                            .layout_style()
+                            .margin()
+                            .resolve_or_zero(inputs.parent_size.width, resolve_calc_value);
+                        let max_available_space = inputs
+                            .parent_size
+                            .maybe_sub(margin.sum_axes())
+                            .maybe_max(taffy::Size::ZERO);
+                        inputs.available_space =
+                            inputs.available_space.maybe_min(max_available_space);
+                    }
+
                     let SpecialElementData::TableRoot(context) = &self.nodes[dom_node_id(node_id)]
                         .data
                         .downcast_element()
@@ -382,6 +401,35 @@ impl BaseDocument {
                         ctx: context,
                     };
                     let mut output = compute_grid_layout(&mut table_wrapper, node_id, inputs);
+
+                    // Absolutely positioned children take no part in the table grid. Their
+                    // static position is the top-left of the table's content box.
+                    let context = table_wrapper.ctx;
+                    if inputs.run_mode == RunMode::PerformLayout && !context.oof_children.is_empty()
+                    {
+                        let style = &context.style;
+                        let parent_width = inputs.parent_size.width;
+                        let padding = style
+                            .padding
+                            .resolve_or_zero(parent_width, resolve_calc_value);
+                        let border = style
+                            .border
+                            .resolve_or_zero(parent_width, resolve_calc_value);
+                        let static_position = taffy::Point {
+                            x: padding.left + border.left,
+                            y: padding.top + border.top,
+                        }
+                        .map(|pos| AxisStaticPosition::from_edge(pos, AxisStaticEdge::Start));
+                        let in_flow_count = context.cells.len();
+                        for (idx, (child_id, position)) in context.oof_children.iter().enumerate() {
+                            output.oof_candidates.push(OofCandidate {
+                                node: taffy_node_id(*child_id),
+                                order: (in_flow_count + idx) as u32,
+                                position: *position,
+                                static_position,
+                            });
+                        }
+                    }
 
                     // HACK: Cap scrollable overflow at node size to prevent scrolling
                     output.scrollable_overflow_rect.left = 0.0;

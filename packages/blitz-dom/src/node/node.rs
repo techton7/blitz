@@ -7,7 +7,6 @@ use blitz_traits::events::{
 use blitz_traits::node_id::NodeId;
 use blitz_traits::shell::ShellProvider;
 use euclid::{Point2D, Rect, Size2D};
-use html_escape::encode_quoted_attribute_to_string;
 use keyboard_types::Modifiers;
 use kurbo::{Affine, Rect as KurboRect};
 use markup5ever::{LocalName, local_name};
@@ -39,12 +38,6 @@ use thin_vec::ThinVec;
 
 use super::stylo_data::{ComputedStyleRef, StyloData};
 use super::{Attribute, DocumentData, ElementData, LayoutData};
-
-#[derive(Clone, Copy)]
-enum OutputStyle {
-    Normal,
-    Pretty,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayOuter {
@@ -1095,125 +1088,6 @@ impl Node {
         s
     }
 
-    /// Renders the HTML of this node and all its children as a `String` without extra whitespace.
-    ///
-    /// Example output:
-    ///
-    /// ```text
-    /// <html><head /><body><main id="main"><div class="arbitrary-class" /></main></body></html>
-    /// ```
-    pub fn outer_html(&self) -> String {
-        let mut output = String::new();
-        self.write_outer_html(&mut output);
-        output
-    }
-
-    /// Renders the HTML of this node and all its children as a `String` with whitespace for human
-    /// readability.
-    ///
-    /// Example output:
-    ///
-    /// ```text
-    /// <html>
-    ///   <head />
-    ///   <body>
-    ///     <main id="main">
-    ///       <div class="arbitrary-class" />
-    ///     </main>
-    ///   </body>
-    /// </html>
-    /// ```
-    pub fn outer_html_pretty(&self) -> String {
-        let mut output = String::new();
-        self.write_outer_html_pretty(&mut output);
-        output
-    }
-
-    pub fn write_outer_html(&self, writer: &mut String) {
-        self.write_outer_html_in_style(writer, OutputStyle::Normal, 0);
-    }
-
-    pub fn write_outer_html_pretty(&self, writer: &mut String) {
-        self.write_outer_html_in_style(writer, OutputStyle::Pretty, 0);
-    }
-
-    fn write_outer_html_in_style(&self, writer: &mut String, style: OutputStyle, nesting: usize) {
-        const INDENT: &str = "  ";
-        let has_children = !self.children.is_empty();
-        let current_color = self
-            .primary_styles()
-            .map(|style| style.clone_color())
-            .map(|color| color.to_css_string());
-
-        match &self.data {
-            NodeData::Document(_) => {}
-            NodeData::Comment { .. } => {}
-            NodeData::AnonymousBlock(_) => {}
-            // NodeData::Doctype { name, .. } => write!(s, "DOCTYPE {name}"),
-            NodeData::Text(data) => {
-                if matches!(style, OutputStyle::Pretty) {
-                    for _ in 0..nesting {
-                        writer.push_str(INDENT);
-                    }
-                }
-                writer.push_str(data.content.as_str());
-                if matches!(style, OutputStyle::Pretty) {
-                    writer.push('\n');
-                }
-            }
-            NodeData::Element(data) => {
-                if matches!(style, OutputStyle::Pretty) {
-                    for _ in 0..nesting {
-                        writer.push_str(INDENT);
-                    }
-                }
-                writer.push('<');
-                writer.push_str(&data.name.local);
-
-                for attr in data.attrs() {
-                    writer.push(' ');
-                    writer.push_str(&attr.name.local);
-                    writer.push_str("=\"");
-                    #[allow(clippy::unnecessary_unwrap)] // Convert to if-let chain once stabilised
-                    if current_color.is_some() && attr.value.contains("currentColor") {
-                        let value = attr
-                            .value
-                            .replace("currentColor", current_color.as_ref().unwrap());
-                        encode_quoted_attribute_to_string(&value, writer);
-                    } else {
-                        encode_quoted_attribute_to_string(&attr.value, writer);
-                    }
-                    writer.push('"');
-                }
-                if !has_children {
-                    writer.push_str(" /");
-                }
-                writer.push('>');
-                if matches!(style, OutputStyle::Pretty) {
-                    writer.push('\n');
-                }
-
-                if has_children {
-                    for &child_id in &self.children {
-                        self.tree()[child_id].write_outer_html_in_style(writer, style, nesting + 1);
-                    }
-
-                    if matches!(style, OutputStyle::Pretty) {
-                        for _ in 0..nesting {
-                            writer.push_str(INDENT);
-                        }
-                    }
-                    writer.push_str("</");
-                    writer.push_str(&data.name.local);
-                    writer.push('>');
-                    if matches!(style, OutputStyle::Pretty) {
-                        writer.push('\n');
-                    }
-                }
-            }
-        }
-    }
-
     pub fn attrs(&self) -> Option<&[Attribute]> {
         Some(&self.element_data()?.attrs)
     }
@@ -1578,6 +1452,7 @@ impl Node {
             if let Some(ild) = element_data.inline_layout_data.as_ref() {
                 let layout = &ild.layout;
                 let scale = layout.scale();
+                let y = y - ild.block_offset;
 
                 if let Some((cluster, _side)) =
                     Cluster::from_point_exact(layout, x * scale, y * scale)
@@ -1637,6 +1512,7 @@ impl Node {
         let inline_layout = element_data.inline_layout_data.as_ref()?;
         let layout = &inline_layout.layout;
         let scale = layout.scale();
+        let y = y - inline_layout.block_offset;
 
         // Use Parley's cluster hit testing (from_point is more forgiving than from_point_exact)
         let (cluster, side) = Cluster::from_point(layout, x * scale, y * scale)?;
@@ -1662,6 +1538,24 @@ impl Node {
         };
 
         Some(offset)
+    }
+
+    /// Whether this node is a non-atomic inline element: one that has no layout box of its
+    /// own because it is flattened into the containing inline root's text layout as a style
+    /// span.
+    pub fn is_non_atomic_inline(&self) -> bool {
+        let Some(element) = self.element_data() else {
+            return false;
+        };
+        if self.flags.is_inline_root()
+            || crate::layout::replaced::is_inline_box_element(&element.name.local)
+        {
+            return false;
+        }
+        self.primary_styles().is_some_and(|styles| {
+            let display = styles.clone_display();
+            display.outside() == DisplayOutside::Inline && display.inside() == DisplayInside::Flow
+        })
     }
 
     /// The node whose box this node's `Layout.location` is relative to: the
@@ -1697,7 +1591,7 @@ impl Node {
 
     /// Whether this node can act as an [`offset_parent`](Self::offset_parent): a positioned
     /// element, or one of the elements that always qualify (`body`, `td`, `th`).
-    fn is_offset_parent(&self) -> bool {
+    pub(crate) fn is_offset_parent(&self) -> bool {
         let Some(styles) = self.primary_styles() else {
             return false;
         };
@@ -1712,7 +1606,7 @@ impl Node {
     /// Whether this node is a non-positioned `body` element. When such an element is the
     /// `offsetParent`, `offsetLeft`/`offsetTop` are measured from the initial containing
     /// block origin rather than from the `body`'s padding edge.
-    fn is_static_body(&self) -> bool {
+    pub(crate) fn is_static_body(&self) -> bool {
         self.data.is_element_with_tag_name(&local_name!("body"))
             && self
                 .primary_styles()
@@ -1731,12 +1625,138 @@ impl Node {
         }
     }
 
+    /// The per-line-box fragment boxes of a non-atomic inline element, in CSS pixels relative
+    /// to the border box of its inline root.
+    ///
+    /// Returns `None` for nodes that have their own layout box.
+    pub fn inline_fragment_boxes(&self) -> Option<impl Iterator<Item = taffy::Rect<f32>> + '_> {
+        use parley::PositionedLayoutItem;
+
+        if !self.is_non_atomic_inline() {
+            return None;
+        }
+
+        let inline_root = self.inline_root_ancestor()?;
+        let inline_layout = inline_root.element_data()?.inline_layout_data.as_ref()?;
+        let layout = &inline_layout.layout;
+        let scale = layout.scale();
+
+        // Walk up the DOM parent chain from `id` to check whether it is (or is
+        // inside) the target node, stopping at the inline root.
+        let inline_root_id = inline_root.id;
+        let is_in_target = move |mut id: NodeId| -> bool {
+            loop {
+                if id == self.id {
+                    return true;
+                }
+                if id == inline_root_id {
+                    return false;
+                }
+                match self.with(id).parent {
+                    Some(parent) => id = parent,
+                    None => return false,
+                }
+            }
+        };
+
+        let root_layout = inline_root.unrounded_layout();
+        let content_box_inset = root_layout.padding + root_layout.border;
+        let origin_x = content_box_inset.left;
+        let origin_y = content_box_inset.top + inline_layout.block_offset;
+
+        fn union(acc: &mut Option<taffy::Rect<f32>>, left: f32, top: f32, right: f32, bottom: f32) {
+            *acc = Some(match *acc {
+                Some(rect) => taffy::Rect {
+                    left: rect.left.min(left),
+                    top: rect.top.min(top),
+                    right: rect.right.max(right),
+                    bottom: rect.bottom.max(bottom),
+                },
+                None => taffy::Rect {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                },
+            });
+        }
+
+        // One rect per line box: the union of all of the target's fragments on that line
+        Some(layout.lines().filter_map(move |line| {
+            let line_metrics = line.metrics();
+            let mut line_rect: Option<taffy::Rect<f32>> = None;
+
+            for item in line.items() {
+                match item {
+                    PositionedLayoutItem::GlyphRun(glyph_run) => {
+                        if !is_in_target(glyph_run.style().brush.id) {
+                            continue;
+                        }
+                        let x0 = glyph_run.offset();
+                        let x1 = x0 + glyph_run.advance();
+                        // Use the line box's block extent rather than the
+                        // run's font ascent/descent: fonts with small
+                        // typographic metrics would otherwise produce rects
+                        // that clip the rendered glyphs. This matches the
+                        // geometry used for text selection highlights.
+                        let y0 = line_metrics.block_min_coord;
+                        let y1 = line_metrics.block_max_coord;
+                        union(&mut line_rect, x0, y0, x1, y1);
+                    }
+                    PositionedLayoutItem::InlineBox(inline_box) => {
+                        if !is_in_target(NodeId::from_u64(inline_box.id)) {
+                            continue;
+                        }
+                        let x0 = inline_box.x;
+                        let y0 = inline_box.y;
+                        union(
+                            &mut line_rect,
+                            x0,
+                            y0,
+                            x0 + inline_box.width,
+                            y0 + inline_box.height,
+                        );
+                    }
+                }
+            }
+
+            line_rect.map(|rect| taffy::Rect {
+                left: origin_x + rect.left / scale,
+                top: origin_y + rect.top / scale,
+                right: origin_x + rect.right / scale,
+                bottom: origin_y + rect.bottom / scale,
+            })
+        }))
+    }
+
     /// CSSOM View's `offsetLeft`/`offsetTop`: the offset of this node's border box from the
     /// padding edge of its [`offset_parent`](Self::offset_parent).
     pub fn offset_top_left(&self) -> crate::util::Point<f32> {
         let mut x = 0.0;
         let mut y = 0.0;
         let mut current = self;
+
+        // Non-atomic inlines have no layout box of their own: start from the first
+        // fragment box (relative to the inline root's border box) and continue the
+        // walk from the inline root.
+        if let Some(mut fragments) = self.inline_fragment_boxes() {
+            if let Some(first) = fragments.next() {
+                x += first.left;
+                y += first.top;
+            }
+            let Some(inline_root) = self.inline_root_ancestor() else {
+                return crate::util::Point { x, y };
+            };
+            if inline_root.is_offset_parent() && !inline_root.is_static_body() {
+                let border = inline_root.final_layout().border;
+                return crate::util::Point {
+                    x: x - border.left,
+                    y: y - border.top,
+                };
+            }
+            current = inline_root;
+        }
+
         loop {
             let layout = current.final_layout();
             x += layout.location.x;
