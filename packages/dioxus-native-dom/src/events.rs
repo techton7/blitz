@@ -951,8 +951,8 @@ pub fn dispatch_synthetic_key(
 
     // 3. Handle Enter / Space button activation
     let is_button = doc.get_node(target_node_id).and_then(|n| n.element_data()).is_some_and(|el| {
-        el.name.local.as_ref() == "button"
-            || el.attrs().iter().any(|a| a.name.local.as_ref() == "role" && a.value == "button")
+        &*el.name.local == "button"
+            || el.attrs().iter().any(|a| &*a.name.local == "role" && a.value == "button")
     });
     if is_button && (key == Key::Enter || key == Key::Character(" ".into())) {
         dispatch_synthetic_click(doc, target_node_id, combined_mods);
