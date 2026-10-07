@@ -888,6 +888,9 @@ fn raster_axis_tiling(
     }
 }
 
+/// Subpixel tolerance for floating-point layout and scaling jitter (~1/10,000 px).
+const SUBPIXEL_EPSILON: f64 = 1e-4;
+
 /// Per-axis placement and tiling for a gradient layer. Unlike raster images,
 /// gradients cannot rely on brush repetition, so `Repeat`/`Round` also produce
 /// explicit tiles. When the clip box extends beyond the origin box, tiling
@@ -914,6 +917,19 @@ fn gradient_axis_tiling(
             } else {
                 (origin_start, origin_len)
             };
+            // When tile_len covers or exceeds the origin len (default CSS auto sizing)
+            // with no background offset, delegate to continuous peniko gradient extension
+            // (count: 1, rect_len: area_len) rather than creating multiple discrete tiles
+            // that restart the gradient stops. This prevents L-shaped color bands and seams
+            // across border-overflow while preserving intentional small-tile pattern repetition.
+            if tile_len + SUBPIXEL_EPSILON >= origin_len && bg_pos.abs() < SUBPIXEL_EPSILON {
+                return AxisTiling {
+                    translate: area_start,
+                    rect_len: area_len,
+                    count: 1,
+                    stride: 0.0,
+                };
+            }
             let extend_len = extend((origin_start - area_start) + bg_pos, tile_len);
             let count = ((area_len + extend_len) / tile_len).ceil() as u32;
             AxisTiling {
@@ -976,3 +992,81 @@ fn extend(offset: f64, length: f64) -> f64 {
         -extend_length
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use style::values::specified::background::BackgroundRepeatKeyword;
+
+    #[test]
+    fn test_auto_sized_gradient_repeat_border_overflow() {
+        let t = gradient_axis_tiling(
+            BackgroundRepeatKeyword::Repeat,
+            2.0,   // origin_start
+            196.0, // origin_len
+            0.0,   // clip_start
+            200.0, // clip_len
+            0.0,   // bg_pos
+            196.0, // tile_len
+        );
+        assert_eq!(t.count, 1);
+        assert!((t.translate - 0.0).abs() < 1e-5);
+        assert!((t.rect_len - 200.0).abs() < 1e-5);
+        assert!((t.stride - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_auto_sized_gradient_no_repeat_border_overflow() {
+        let t = gradient_axis_tiling(
+            BackgroundRepeatKeyword::NoRepeat,
+            2.0,   // origin_start
+            196.0, // origin_len
+            0.0,   // clip_start
+            200.0, // clip_len
+            0.0,   // bg_pos
+            196.0, // tile_len
+        );
+        assert_eq!(t.count, 1);
+        assert!((t.translate - 2.0).abs() < 1e-5);
+        assert!((t.rect_len - 196.0).abs() < 1e-5);
+        assert!((t.stride - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_small_tile_repeating_gradient_pattern() {
+        let t = gradient_axis_tiling(
+            BackgroundRepeatKeyword::Repeat,
+            2.0,   // origin_start
+            196.0, // origin_len
+            0.0,   // clip_start
+            200.0, // clip_len
+            0.0,   // bg_pos
+            50.0,  // tile_len
+        );
+        assert!(t.count > 1);
+    }
+
+    #[test]
+    fn test_scaled_dimensions_stability() {
+        let scales = [1.05, 1.2, 1.5];
+        for &scale in &scales {
+            let origin_start = 2.0 * scale;
+            let origin_len = 196.0 * scale;
+            let clip_start = 0.0 * scale;
+            let clip_len = 200.0 * scale;
+            let tile_len = 196.0 * scale;
+
+            let t = gradient_axis_tiling(
+                BackgroundRepeatKeyword::Repeat,
+                origin_start,
+                origin_len,
+                clip_start,
+                clip_len,
+                0.0,
+                tile_len,
+            );
+            assert_eq!(t.count, 1);
+        }
+    }
+}
+
