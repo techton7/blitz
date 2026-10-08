@@ -298,17 +298,21 @@ impl RenderedElementBacking for NodeHandle {
     }
 
     fn set_focus(&self, focus: bool) -> Pin<Box<dyn Future<Output = MountedResult<()>>>> {
-        let mut doc = self.doc_mut();
-        if focus {
-            // TODO: queue focus events somehow
-            doc.set_focus_to(self.node_id);
-        } else if doc.get_focussed_node_id() == Some(self.node_id) {
-            // Q: Should this only clear focus if the node is focussed?
-            // TODO: queue blur events somehow
-            doc.clear_focus();
-        }
-
-        Box::pin(async { Ok(()) })
+        let node_id = self.node_id;
+        let doc = Rc::clone(&self.doc);
+        Box::pin(async move {
+            if let Ok(mut doc) = doc.try_borrow_mut() {
+                if focus {
+                    // TODO: queue focus events somehow
+                    doc.set_focus_to(node_id);
+                } else if doc.get_focussed_node_id() == Some(node_id) {
+                    // Q: Should this only clear focus if the node is focussed?
+                    // TODO: queue blur events somehow
+                    doc.clear_focus();
+                }
+            }
+            Ok(())
+        })
     }
 }
 
