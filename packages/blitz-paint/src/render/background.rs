@@ -601,17 +601,12 @@ impl ElementCx<'_, '_> {
             return;
         }
 
+        let image_rect = Rect::new(0.0, 0.0, bg_size.width, bg_size.height);
         let tile_rect = Rect::new(0.0, 0.0, x.rect_len, y.rect_len);
-        let bounding_box = self.frame.border_box.bounding_box();
         let current_color = self.style.clone_color();
 
-        let (gradient, gradient_transform) = to_peniko_gradient(
-            gradient,
-            tile_rect,
-            bounding_box,
-            self.scale,
-            &current_color,
-        );
+        let (gradient, gradient_transform) =
+            to_peniko_gradient(gradient, image_rect, self.scale, &current_color);
         let brush = anyrender::Paint::Gradient(&gradient);
 
         let transform = base_transform.then_translate(Vec2 {
@@ -888,9 +883,6 @@ fn raster_axis_tiling(
     }
 }
 
-/// Subpixel tolerance for floating-point layout and scaling jitter (~1/10,000 px).
-const SUBPIXEL_EPSILON: f64 = 1e-4;
-
 /// Per-axis placement and tiling for a gradient layer. Unlike raster images,
 /// gradients cannot rely on brush repetition, so `Repeat`/`Round` also produce
 /// explicit tiles. When the clip box extends beyond the origin box, tiling
@@ -917,19 +909,7 @@ fn gradient_axis_tiling(
             } else {
                 (origin_start, origin_len)
             };
-            // When tile_len covers or exceeds the origin len (default CSS auto sizing)
-            // with no background offset, delegate to continuous peniko gradient extension
-            // (count: 1, rect_len: area_len) rather than creating multiple discrete tiles
-            // that restart the gradient stops. This prevents L-shaped color bands and seams
-            // across border-overflow while preserving intentional small-tile pattern repetition.
-            if tile_len + SUBPIXEL_EPSILON >= origin_len && bg_pos.abs() < SUBPIXEL_EPSILON {
-                return AxisTiling {
-                    translate: area_start,
-                    rect_len: area_len,
-                    count: 1,
-                    stride: 0.0,
-                };
-            }
+
             let extend_len = extend((origin_start - area_start) + bg_pos, tile_len);
             let count = ((area_len + extend_len) / tile_len).ceil() as u32;
             AxisTiling {
@@ -1009,10 +989,10 @@ mod tests {
             0.0,   // bg_pos
             196.0, // tile_len
         );
-        assert_eq!(t.count, 1);
-        assert!((t.translate - 0.0).abs() < 1e-5);
-        assert!((t.rect_len - 200.0).abs() < 1e-5);
-        assert!((t.stride - 0.0).abs() < 1e-5);
+        // Preserves canonical tile_len and strides seamlessly across border overflow
+        assert!(t.count > 1);
+        assert!((t.rect_len - 196.0).abs() < 1e-5);
+        assert!((t.stride - 196.0).abs() < 1e-5);
     }
 
     #[test]
@@ -1044,6 +1024,8 @@ mod tests {
             50.0,  // tile_len
         );
         assert!(t.count > 1);
+        assert!((t.rect_len - 50.0).abs() < 1e-5);
+        assert!((t.stride - 50.0).abs() < 1e-5);
     }
 
     #[test]
@@ -1065,7 +1047,9 @@ mod tests {
                 0.0,
                 tile_len,
             );
-            assert_eq!(t.count, 1);
+            assert!(t.count > 1);
+            assert!((t.rect_len - tile_len).abs() < 1e-5);
+            assert!((t.stride - tile_len).abs() < 1e-5);
         }
     }
 }
