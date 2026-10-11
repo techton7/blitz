@@ -468,7 +468,14 @@ impl Node {
     }
 
     pub(crate) fn display_style(&self) -> Option<StyloDisplay> {
-        Some(self.primary_styles().as_ref()?.clone_display())
+        let display = self.primary_styles().as_ref()?.clone_display();
+        Some(
+            if self.element_data().is_some_and(|el| el.is_button_input()) {
+                stylo_taffy::convert::button_input_display(display)
+            } else {
+                display
+            },
+        )
     }
 
     pub fn is_or_contains_block(&self) -> bool {
@@ -494,9 +501,7 @@ impl Node {
         if is_floating {
             return false;
         }
-        let display = style
-            .map(|s| s.clone_display())
-            .unwrap_or(StyloDisplay::inline());
+        let display = self.display_style().unwrap_or(StyloDisplay::inline());
         match display.outside() {
             DisplayOutside::None => false,
             DisplayOutside::Block => true,
@@ -1118,6 +1123,12 @@ impl Node {
             if crate::layout::replaced::is_replaced_element(&el.name.local) {
                 flags |= stylo_taffy::StyleFlags::IS_REPLACED;
             }
+            if el.name.local == local_name!("button") {
+                flags |= stylo_taffy::StyleFlags::IS_BUTTON;
+            }
+            if el.is_button_input() {
+                flags |= stylo_taffy::StyleFlags::IS_BUTTON_INPUT;
+            }
         }
 
         stylo_taffy::TaffyStyloStyle::new(styles, flags)
@@ -1127,7 +1138,19 @@ impl Node {
     /// for nodes without computed styles (e.g. text nodes).
     pub fn taffy_display(&self) -> taffy::Display {
         self.primary_styles()
-            .map(|s| stylo_taffy::convert::display(s.clone_display()))
+            .map(|style| {
+                let display = style.clone_display();
+                if self.element_data().is_some_and(|el| el.is_button_input())
+                    && !matches!(
+                        display.inside(),
+                        DisplayInside::None | DisplayInside::Contents
+                    )
+                {
+                    taffy::Display::FlowRoot
+                } else {
+                    stylo_taffy::convert::display(display)
+                }
+            })
             .unwrap_or(taffy::Display::Block)
     }
 

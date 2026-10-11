@@ -10888,14 +10888,14 @@ name = "blitz-host-transport"
 version = "0.2.0"
 
 [[patch.unused]]
-name = "oxidase"
-version = "0.3.3"
-
-[[patch.unused]]
-name = "oxidase-floating-ui"
-version = "0.3.3"
-
-[[patch.unused]]
 name = "wgpu_context"
 version = "0.9.0"
 source = "git+https://github.com/techton7/anyrender?tag=wgpu_context-v0.9.1-win-policy#dda945f994d4205f1ae14923efa8c61dd30d1ddb"
+
+[[patch.unused]]
+name = "oxidase"
+version = "0.3.4"
+
+[[patch.unused]]
+name = "oxidase-floating-ui"
+version = "0.3.4"
