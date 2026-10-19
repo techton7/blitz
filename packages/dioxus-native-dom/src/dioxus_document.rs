@@ -5,7 +5,7 @@ use crate::events::{
     NativeScrollData, NativeTouchData, NativeWheelData, NodeHandle,
 };
 use crate::mutation_writer::{DioxusState, MutationWriter};
-use crate::qual_name;
+use crate::{qual_name, qual_name_attr};
 use blitz_dom::{
     Attribute, BaseDocument, DEFAULT_CSS, DocGuard, DocGuardMut, Document, DocumentConfig,
     EventDriver, EventHandler, Node,
@@ -122,7 +122,7 @@ impl DioxusDocument {
 
         // Create another virtual element to hold the root <div id="main"></div> under the html element
         let main_attr = blitz_dom::Attribute {
-            name: qual_name("id", None),
+            name: qual_name_attr("id", None),
             value: "main".to_string(),
         };
         let main_element_id = mutr.create_element(qual_name("main", None), vec![main_attr]);
@@ -167,7 +167,7 @@ impl DioxusDocument {
         let attributes = attributes
             .iter()
             .map(|(name, value)| Attribute {
-                name: qual_name(name, None),
+                name: qual_name_attr(name, None),
                 value: value.clone(),
             })
             .collect();
@@ -409,4 +409,66 @@ mod tests {
         let main = inner.get_node(doc.main_element_id).unwrap();
         assert_eq!(main.children.len(), 100);
     }
+
+
+    #[test]
+    fn attributes_have_empty_namespace_on_mounted_element() {
+        use blitz_dom::ns;
+        use dioxus_core::Element;
+        use dioxus_html::MountedData;
+
+        #[derive(Default)]
+        struct State {
+            mounted: RefCell<Option<Rc<MountedData>>>,
+        }
+
+        fn app() -> Element {
+            let state: Rc<State> = dioxus_core::use_hook(|| dioxus_core::consume_context());
+            rsx! {
+                div {
+                    "data-state": "open",
+                    role: "dialog",
+                    onmounted: move |e| *state.mounted.borrow_mut() = Some(e.data()),
+                    "hello"
+                }
+            }
+        }
+
+        let state = Rc::new(State::default());
+        let vdom = VirtualDom::new(app).with_root_context(Rc::clone(&state));
+        let mut doc = DioxusDocument::new(vdom, DocumentConfig::default());
+        doc.initial_build();
+
+        let mounted = state.mounted.borrow().clone().unwrap();
+        let handle = mounted.downcast::<NodeHandle>().unwrap();
+        let node_id = handle.node_id();
+
+        let inner = doc.inner.borrow();
+        let node = inner.get_node(node_id).expect("node exists");
+        let elem = node.element_data().expect("element data exists");
+
+        // Element tag must be in HTML namespace
+        assert_eq!(elem.name.ns, ns!(html));
+        assert_eq!(&*elem.name.local, "div");
+
+        // Attributes must be in empty namespace
+        assert!(!elem.attrs.is_empty());
+        for attr in elem.attrs.iter() {
+            assert_eq!(
+                attr.name.ns,
+                ns!(),
+                "attribute '{}' must have empty namespace",
+                attr.name.local
+            );
+        }
+
+        let data_state = elem.attrs.iter().find(|a| &*a.name.local == "data-state");
+        assert!(data_state.is_some());
+        assert_eq!(data_state.unwrap().value, "open");
+
+        let role = elem.attrs.iter().find(|a| &*a.name.local == "role");
+        assert!(role.is_some());
+        assert_eq!(role.unwrap().value, "dialog");
+    }
 }
+

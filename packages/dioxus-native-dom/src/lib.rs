@@ -35,6 +35,14 @@ pub(crate) fn qual_name(local_name: &str, namespace: Option<&str>) -> QualName {
     }
 }
 
+pub(crate) fn qual_name_attr(local_name: &str, namespace: Option<&str>) -> QualName {
+    QualName {
+        prefix: None,
+        ns: namespace.map(Namespace::from).unwrap_or(ns!()),
+        local: LocalName::from(local_name),
+    }
+}
+
 // Syntax sugar to make tracing calls less noisy in function below
 macro_rules! trace {
     ($pattern:literal) => {{
@@ -59,3 +67,26 @@ macro_rules! trace {
     }};
 }
 pub(crate) use trace;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attribute_namespace_defaults_to_empty() {
+        let attr_name = qual_name_attr("data-state", None);
+        assert_eq!(attr_name.ns, ns!());
+        assert_eq!(&*attr_name.local, "data-state");
+
+        let elem_name = qual_name("div", None);
+        assert_eq!(elem_name.ns, ns!(html));
+        assert_eq!(&*elem_name.local, "div");
+    }
+
+    #[test]
+    fn attribute_namespace_preserves_explicit_namespace() {
+        let attr_name = qual_name_attr("href", Some("http://www.w3.org/1999/xlink"));
+        assert_eq!(attr_name.ns, Namespace::from("http://www.w3.org/1999/xlink"));
+        assert_eq!(&*attr_name.local, "href");
+    }
+}
