@@ -12,6 +12,9 @@ use style::values::generics::text::{GenericTextDecorationInset, GenericTextDecor
 
 use crate::color::{Color, ToColorColor as _};
 use crate::{FONT_EMBOLDEN_ENABLED, SELECTION_COLOR};
+use crate::bitmap_glyph::{
+    compute_bitmap_placement_transform, extract_raster_glyph, BitmapCacheKey, BitmapGlyphCache,
+};
 
 /// Draw the backgrounds of inline elements (e.g. `<span style="background: ...">`).
 ///
@@ -22,7 +25,7 @@ use crate::{FONT_EMBOLDEN_ENABLED, SELECTION_COLOR};
 ///
 /// The inline root's own background is painted separately (as a normal block box), so
 /// runs belonging to the root are skipped to avoid drawing it twice.
-pub(crate) fn draw_inline_backgrounds<'a>(
+pub fn draw_inline_backgrounds<'a>(
     scene: &mut impl PaintScene,
     lines: impl Iterator<Item = Line<'a, TextBrush>>,
     doc: &BaseDocument,
@@ -239,11 +242,27 @@ struct LineDecoration {
 /// Reusable scratch storage for drawing text across all inline formatting contexts in a
 /// document. The vectors are cleared between uses without releasing their allocations.
 #[derive(Default)]
-pub(crate) struct DrawTextContext {
+pub struct DrawTextContext {
     stack: Vec<DecorationStackEntry>,
     path_scratch: Vec<NodeId>,
     deco_boxes: Vec<LineDecoration>,
     win_ascent_ratios: WinAscentCache,
+    pub custom_bitmap_glyph_cache: Option<BitmapGlyphCache>,
+    vector_glyphs_scratch: Vec<anyrender::Glyph>,
+}
+
+impl DrawTextContext {
+    pub fn with_bitmap_glyph_cache<R>(
+        &mut self,
+        f: impl FnOnce(&mut BitmapGlyphCache) -> R,
+    ) -> R {
+        if let Some(ref mut cache) = self.custom_bitmap_glyph_cache {
+            f(cache)
+        } else {
+            let mut global = BitmapGlyphCache::global().lock().unwrap();
+            f(&mut global)
+        }
+    }
 }
 
 /// Resolve the CSS `text-decoration-thickness` to a device-pixel size.
@@ -553,7 +572,7 @@ fn flush_line_decorations(
     }
 }
 
-pub(crate) fn stroke_text<'a>(
+pub fn stroke_text<'a>(
     scene: &mut impl PaintScene,
     lines: impl Iterator<Item = Line<'a, TextBrush>>,
     doc: &BaseDocument,
@@ -567,10 +586,13 @@ pub(crate) fn stroke_text<'a>(
         path_scratch,
         deco_boxes,
         win_ascent_ratios,
+        custom_bitmap_glyph_cache,
+        vector_glyphs_scratch,
     } = context;
     stack.clear();
     path_scratch.clear();
     deco_boxes.clear();
+    vector_glyphs_scratch.clear();
 
     // Persistent stack mirroring the ancestor path (inline root -> current run's
     // node) as we walk the runs. The `text-decoration-*` properties are *not*
@@ -635,24 +657,112 @@ pub(crate) fn stroke_text<'a>(
                     kurbo::Vec2::default()
                 };
 
-                let normalized_coords: &[i16] = bytemuck::cast_slice(run.normalized_coords());
-                scene.draw_glyphs(
-                    font,
-                    font_size,
-                    !FONT_EMBOLDEN_ENABLED, // hint
-                    normalized_coords,
-                    embolden,
-                    Fill::NonZero,
-                    &anyrender::Paint::from(text_color),
-                    1.0, // alpha
-                    transform,
-                    glyph_xform,
-                    glyph_run.positioned_glyphs().map(|glyph| anyrender::Glyph {
-                        id: glyph.id as _,
-                        x: glyph.x,
-                        y: glyph.y,
-                    }),
-                );
+                let font_blob = font.data.as_ref();
+                let face_index = font.index;
+                let font_key = font.data.id();
+                let parsed_face = ttf_parser::Face::parse(font_blob, face_index).ok();
+                let has_raster_tables = parsed_face.as_ref().map(|f| {
+                    let tables = f.tables();
+                    tables.sbix.is_some() || tables.cbdt.is_some() || tables.ebdt.is_some() || tables.bdat.is_some()
+                }).unwrap_or(false);
+
+                if !has_raster_tables {
+                    let normalized_coords: &[i16] = bytemuck::cast_slice(run.normalized_coords());
+                    scene.draw_glyphs(
+                        font,
+                        font_size,
+                        !FONT_EMBOLDEN_ENABLED, // hint
+                        normalized_coords,
+                        embolden,
+                        Fill::NonZero,
+                        &anyrender::Paint::from(text_color),
+                        1.0, // alpha
+                        transform,
+                        glyph_xform,
+                        glyph_run.positioned_glyphs().map(|glyph| anyrender::Glyph {
+                            id: glyph.id as _,
+                            x: glyph.x,
+                            y: glyph.y,
+                        }),
+                    );
+                } else {
+                    let target_ppem = font_size.round().max(1.0) as u16;
+                    let normalized_coords: &[i16] = bytemuck::cast_slice(run.normalized_coords());
+                    vector_glyphs_scratch.clear();
+
+                    for glyph in glyph_run.positioned_glyphs() {
+                        let glyph_id = glyph.id as u16;
+                        let raster_glyph = extract_raster_glyph(font_blob, face_index, glyph_id, target_ppem);
+                        if let Some(raster_glyph) = raster_glyph {
+                            // Flush preceding vector glyphs to preserve exact draw order
+                            if !vector_glyphs_scratch.is_empty() {
+                                scene.draw_glyphs(
+                                    font,
+                                    font_size,
+                                    !FONT_EMBOLDEN_ENABLED,
+                                    normalized_coords,
+                                    embolden,
+                                    Fill::NonZero,
+                                    &anyrender::Paint::from(text_color),
+                                    1.0,
+                                    transform,
+                                    glyph_xform,
+                                    vector_glyphs_scratch.iter().copied(),
+                                );
+                                vector_glyphs_scratch.clear();
+                            }
+
+                            let key = BitmapCacheKey {
+                                font_key,
+                                face_index,
+                                glyph_id,
+                                strike_ppem: raster_glyph.strike_ppem,
+                            };
+
+                            let maybe_image = if let Some(cache) = custom_bitmap_glyph_cache {
+                                cache.get_or_decode(key, &raster_glyph.data)
+                            } else {
+                                let mut global = BitmapGlyphCache::global().lock().unwrap();
+                                global.get_or_decode(key, &raster_glyph.data)
+                            };
+
+                            if let Some(image_data) = maybe_image {
+                                let (placement_transform, _bounds) = compute_bitmap_placement_transform(
+                                    glyph.x,
+                                    glyph.y,
+                                    font_size,
+                                    &raster_glyph,
+                                );
+                                let glyph_transform = transform * placement_transform;
+                                scene.draw_image((&image_data).into(), glyph_transform);
+                            }
+                        } else {
+                            vector_glyphs_scratch.push(anyrender::Glyph {
+                                id: glyph.id as _,
+                                x: glyph.x,
+                                y: glyph.y,
+                            });
+                        }
+                    }
+
+                    // Flush remaining trailing vector glyphs
+                    if !vector_glyphs_scratch.is_empty() {
+                        scene.draw_glyphs(
+                            font,
+                            font_size,
+                            !FONT_EMBOLDEN_ENABLED,
+                            normalized_coords,
+                            embolden,
+                            Fill::NonZero,
+                            &anyrender::Paint::from(text_color),
+                            1.0,
+                            transform,
+                            glyph_xform,
+                            vector_glyphs_scratch.iter().copied(),
+                        );
+                        vector_glyphs_scratch.clear();
+                    }
+                }
 
                 // Accumulate this run's contribution to each decorating box on its ancestor
                 // path. The decoration is drawn once per box after the whole line has been
@@ -720,7 +830,7 @@ pub(crate) fn stroke_text<'a>(
 
 /// Draw selection highlight rectangles for the given byte range in a layout.
 /// Uses Parley's Selection type for accurate geometry calculation.
-pub(crate) fn draw_text_selection(
+pub fn draw_text_selection(
     scene: &mut impl PaintScene,
     layout: &Layout<TextBrush>,
     transform: Affine,
