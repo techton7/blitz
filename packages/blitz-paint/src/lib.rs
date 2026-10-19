@@ -3,6 +3,7 @@
 
 #![allow(clippy::collapsible_if)]
 
+pub mod bitmap_glyph;
 mod color;
 mod debug_overlay;
 mod filters;
@@ -11,7 +12,7 @@ mod kurbo_css;
 mod layers;
 mod render;
 mod sizing;
-mod text;
+pub mod text;
 
 use std::collections::HashMap;
 

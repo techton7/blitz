@@ -1017,6 +1017,7 @@ dependencies = [
  "anyrender",
  "anyrender_svg",
  "blitz-dom",
+ "blitz-html",
  "blitz-traits",
  "bytemuck",
  "color",
@@ -1024,11 +1025,13 @@ dependencies = [
  "kurbo",
  "parley",
  "peniko",
+ "png 0.18.1",
  "skrifa",
  "smallvec",
  "stylo",
  "taffy",
  "tracing",
+ "ttf-parser",
  "usvg",
 ]
 
