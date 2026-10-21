@@ -1246,6 +1246,7 @@ impl<'doc> DocumentMutator<'doc> {
         }
     }
 
+    #[allow(clippy::needless_return)]
     fn process_button_input(&mut self, target_id: NodeId) {
         let node = &self.doc.nodes[target_id];
         let Some(data) = node.element_data() else {
