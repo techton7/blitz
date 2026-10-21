@@ -75,15 +75,18 @@ impl crate::document::BaseDocument {
             ua_or_user: &guard.read(),
         };
 
-        let root = TDocument::as_node(&&self.nodes[self.root_node_id])
-            .first_element_child()
-            .unwrap()
-            .as_element()
-            .unwrap();
+        if let Some(root_node) =
+            TDocument::as_node(&&self.nodes[self.root_node_id]).first_element_child()
+        {
+            if let Some(root) = root_node.as_element() {
+                self.stylist
+                    .flush(&guards)
+                    .process_style(root, Some(&self.snapshots));
+            }
+        }
 
-        self.stylist
-            .flush(&guards)
-            .process_style(root, Some(&self.snapshots));
+        const TIME_EPSILON: f64 = 1e-5;
+        let now_effective = now + TIME_EPSILON;
 
         // Mark actively animating nodes as dirty
         let mut sets = self.animations.sets.write();
@@ -161,7 +164,9 @@ impl crate::document::BaseDocument {
             };
 
             for animation in set.animations.iter_mut() {
-                if animation.state == AnimationState::Pending && animation.started_at <= now {
+                if animation.state == AnimationState::Pending
+                    && animation.started_at <= now_effective
+                {
                     animation.state = AnimationState::Running;
                     let active_duration = match animation.iteration_state {
                         KeyframesIterationState::Finite(_, max) => max * animation.duration,
@@ -183,7 +188,7 @@ impl crate::document::BaseDocument {
                         }),
                     });
 
-                    if animation.duration == 0.0 || animation.has_ended(now) {
+                    if animation.duration == 0.0 || animation.has_ended(now_effective) {
                         animation.state = AnimationState::Finished;
                         self.pending_animation_events.push(QueuedAnimationEvent {
                             node_id,
@@ -200,7 +205,8 @@ impl crate::document::BaseDocument {
                 if animation.state == AnimationState::Running {
                     let mut iterations_crossed = 0;
                     let mut last_iteration_elapsed = 0.0f32;
-                    while animation.duration > 0.0 && animation.iterate_if_necessary(now) {
+                    while animation.duration > 0.0 && animation.iterate_if_necessary(now_effective)
+                    {
                         iterations_crossed += 1;
                         let current_iteration = match animation.iteration_state {
                             KeyframesIterationState::Finite(current, _) => current,
@@ -209,7 +215,7 @@ impl crate::document::BaseDocument {
                         last_iteration_elapsed = (current_iteration * animation.duration) as f32;
                     }
 
-                    if animation.has_ended(now) {
+                    if animation.has_ended(now_effective) {
                         animation.state = AnimationState::Finished;
                         let active_duration = match animation.iteration_state {
                             KeyframesIterationState::Finite(_, max) => max * animation.duration,
@@ -237,7 +243,9 @@ impl crate::document::BaseDocument {
             }
 
             for transition in set.transitions.iter_mut() {
-                if transition.state == AnimationState::Pending && transition.start_time <= now {
+                if transition.state == AnimationState::Pending
+                    && transition.start_time <= now_effective
+                {
                     transition.state = AnimationState::Running;
                     let elapsed = if transition.delay < 0.0 {
                         (-transition.delay).min(transition.property_animation.duration) as f32
@@ -254,7 +262,9 @@ impl crate::document::BaseDocument {
                         }),
                     });
 
-                    if transition.property_animation.duration == 0.0 || transition.has_ended(now) {
+                    if transition.property_animation.duration == 0.0
+                        || transition.has_ended(now_effective)
+                    {
                         transition.state = AnimationState::Finished;
                         self.pending_animation_events.push(QueuedAnimationEvent {
                             node_id,
@@ -268,7 +278,9 @@ impl crate::document::BaseDocument {
                     }
                 }
 
-                if transition.state == AnimationState::Running && transition.has_ended(now) {
+                if transition.state == AnimationState::Running
+                    && transition.has_ended(now_effective)
+                {
                     transition.state = AnimationState::Finished;
                     let property_name = transition.property_animation.property_id().to_css_string();
                     self.pending_animation_events.push(QueuedAnimationEvent {
@@ -297,25 +309,51 @@ impl crate::document::BaseDocument {
             registered_speculative_painters: &RegisteredPaintersImpl,
         };
 
-        // components/layout_2020/lib.rs:983
-        let root = self.root_element();
-        // dbg!(root);
-        let token = RecalcStyle::pre_traverse(root, &context);
-
         let mut nodes_needing_style_image_flush = Vec::new();
-        if token.should_traverse() {
-            // Style the elements, resolving their data
-            let mut traverser = RecalcStyle::new(context);
-            // `Sequential` bypasses Stylo's global pool. See `StyleThreading`.
-            let pool_guard = matches!(self.style_threading, StyleThreading::Parallel)
-                .then(|| STYLE_THREAD_POOL.pool());
-            let rayon_pool = pool_guard.as_ref().and_then(|g| g.as_ref());
-            style::driver::traverse_dom(&traverser, token, rayon_pool);
-            nodes_needing_style_image_flush =
-                std::mem::take(traverser.nodes_needing_style_image_flush.get_mut().unwrap());
+        let mut zero_duration_animations = Vec::new();
+        if let Some(root) = self.try_root_element() {
+            let token = RecalcStyle::pre_traverse(root, &context);
+
+            if token.should_traverse() {
+                // Style the elements, resolving their data
+                let mut traverser = RecalcStyle::new(context);
+                // `Sequential` bypasses Stylo's global pool. See `StyleThreading`.
+                let pool_guard = matches!(self.style_threading, StyleThreading::Parallel)
+                    .then(|| STYLE_THREAD_POOL.pool());
+                let rayon_pool = pool_guard.as_ref().and_then(|g| g.as_ref());
+                style::driver::traverse_dom(&traverser, token, rayon_pool);
+                nodes_needing_style_image_flush =
+                    std::mem::take(traverser.nodes_needing_style_image_flush.get_mut().unwrap());
+                zero_duration_animations =
+                    std::mem::take(traverser.zero_duration_animations.get_mut().unwrap());
+            }
         }
         self.pending_style_image_nodes
             .extend(nodes_needing_style_image_flush);
+
+        for (node_id, name) in zero_duration_animations {
+            if self
+                .completed_zero_duration_animations
+                .insert((node_id, name.clone()))
+            {
+                self.pending_animation_events.push(QueuedAnimationEvent {
+                    node_id,
+                    event: DomEventData::AnimationStart(BlitzAnimationEvent {
+                        animation_name: name.clone(),
+                        elapsed_time: 0.0,
+                        pseudo_element: SmolStr::default(),
+                    }),
+                });
+                self.pending_animation_events.push(QueuedAnimationEvent {
+                    node_id,
+                    event: DomEventData::AnimationEnd(BlitzAnimationEvent {
+                        animation_name: name,
+                        elapsed_time: 0.0,
+                        pseudo_element: SmolStr::default(),
+                    }),
+                });
+            }
+        }
 
         for opaque in self.snapshots.keys() {
             let id = NodeId::from_u64(opaque.id() as u64);
@@ -352,7 +390,9 @@ impl crate::document::BaseDocument {
                     transition.is_new = false;
 
                     // Newly created transition with delay <= 0: promote to Running and check Finished at creation pass t0
-                    if transition.state == AnimationState::Pending && transition.start_time <= now {
+                    if transition.state == AnimationState::Pending
+                        && transition.start_time <= now_effective
+                    {
                         transition.state = AnimationState::Running;
                         self.pending_animation_events.push(QueuedAnimationEvent {
                             node_id,
@@ -364,7 +404,7 @@ impl crate::document::BaseDocument {
                         });
 
                         if transition.property_animation.duration == 0.0
-                            || transition.has_ended(now)
+                            || transition.has_ended(now_effective)
                         {
                             transition.state = AnimationState::Finished;
                             self.pending_animation_events.push(QueuedAnimationEvent {
@@ -401,7 +441,9 @@ impl crate::document::BaseDocument {
                     animation.is_new = false;
 
                     // Newly created animation with delay <= 0: promote to Running and check Finished at creation pass t0
-                    if animation.state == AnimationState::Pending && animation.started_at <= now {
+                    if animation.state == AnimationState::Pending
+                        && animation.started_at <= now_effective
+                    {
                         animation.state = AnimationState::Running;
                         let active_duration = match animation.iteration_state {
                             KeyframesIterationState::Finite(_, max) => max * animation.duration,
@@ -423,7 +465,7 @@ impl crate::document::BaseDocument {
                             }),
                         });
 
-                        if animation.duration == 0.0 || animation.has_ended(now) {
+                        if animation.duration == 0.0 || animation.has_ended(now_effective) {
                             animation.state = AnimationState::Finished;
                             self.pending_animation_events.push(QueuedAnimationEvent {
                                 node_id,
@@ -1593,6 +1635,7 @@ pub struct RecalcStyle<'a> {
     /// dedicated storage on the node (see `flush_image_layers_from_style`)
     /// because their style changed during this traversal.
     nodes_needing_style_image_flush: Mutex<Vec<NodeId>>,
+    zero_duration_animations: Mutex<Vec<(NodeId, String)>>,
 }
 
 impl<'a> RecalcStyle<'a> {
@@ -1600,6 +1643,7 @@ impl<'a> RecalcStyle<'a> {
         RecalcStyle {
             context,
             nodes_needing_style_image_flush: Mutex::new(Vec::new()),
+            zero_duration_animations: Mutex::new(Vec::new()),
         }
     }
 }
@@ -1618,6 +1662,23 @@ impl<'dom> DomTraversal<BlitzNode<'dom>> for RecalcStyle<'_> {
             recalc_style_at(self, context, el, &mut data, note_child);
 
             sync_pseudo_element_styles(el, &data, &self.nodes_needing_style_image_flush);
+            if let Some(style) = data.styles.get_primary() {
+                let ui = style.get_ui();
+                for (i, name) in ui.animation_name_iter().enumerate() {
+                    if let Some(atom) = name.as_atom() {
+                        let duration = ui.animation_duration_mod(i).seconds();
+                        let delay = ui.animation_delay_mod(i).seconds();
+                        if duration == 0.0 && delay <= 0.0 {
+                            if self.context.stylist.lookup_keyframes(atom, el).is_some() {
+                                self.zero_duration_animations
+                                    .lock()
+                                    .unwrap()
+                                    .push((el.id, atom.as_str().to_string()));
+                            }
+                        }
+                    }
+                }
+            }
 
             if !data.damage.is_empty() {
                 // Mark the ancestor chain so that the damage propagation pass

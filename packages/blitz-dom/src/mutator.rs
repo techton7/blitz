@@ -1009,6 +1009,9 @@ impl<'doc> DocumentMutator<'doc> {
                 doc.remove_from_id_map(&id_attr, node_id);
             }
 
+            doc.completed_zero_duration_animations
+                .retain(|(id, _)| *id != node_id);
+
             let node = &mut doc.nodes[node_id];
             let NodeData::Element(ref mut element) = node.data else {
                 return;
