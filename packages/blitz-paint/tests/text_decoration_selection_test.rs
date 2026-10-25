@@ -3,18 +3,18 @@
 
 #![cfg(target_os = "macos")]
 
-use std::sync::Arc;
 use anyrender::{PaintRef, PaintScene, RenderContext};
 use blitz_dom::DocumentConfig;
 use blitz_html::HtmlDocument;
 use blitz_paint::text::{
-    draw_inline_backgrounds, draw_text_selection, stroke_text, DrawTextContext,
+    DrawTextContext, draw_inline_backgrounds, draw_text_selection, stroke_text,
 };
 use kurbo::{Affine, Rect, Shape, Stroke};
+use parley::FontContext;
 use parley::fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
 use parley::layout::PositionedLayoutItem;
-use parley::FontContext;
 use peniko::{BlendMode, Color, Fill, FontData, ImageBrushRef, StyleRef};
+use std::sync::Arc;
 
 const APPLE_COLOR_EMOJI_PATH: &str = "/System/Library/Fonts/Apple Color Emoji.ttc";
 const HELVETICA_PATH: &str = "/System/Library/Fonts/Helvetica.ttc";
@@ -245,10 +245,19 @@ fn test_ac1_underline_spans_across_emoji_run() {
     );
 
     // Verify hybrid rendering: both vector glyphs (Hello, World) and raster image (🚀) were drawn
-    let has_glyphs = scene.events.iter().any(|e| matches!(e, SceneEvent::DrawGlyphs { .. }));
-    let has_image = scene.events.iter().any(|e| matches!(e, SceneEvent::DrawImage { .. }));
+    let has_glyphs = scene
+        .events
+        .iter()
+        .any(|e| matches!(e, SceneEvent::DrawGlyphs { .. }));
+    let has_image = scene
+        .events
+        .iter()
+        .any(|e| matches!(e, SceneEvent::DrawImage { .. }));
     assert!(has_glyphs, "Must have drawn vector glyphs");
-    assert!(has_image, "Must have drawn emoji bitmap glyph via DrawImage");
+    assert!(
+        has_image,
+        "Must have drawn emoji bitmap glyph via DrawImage"
+    );
 
     let line = layout.lines().next().expect("First line exists");
     let runs: Vec<_> = line
@@ -259,7 +268,11 @@ fn test_ac1_underline_spans_across_emoji_run() {
         })
         .collect();
 
-    assert!(runs.len() >= 3, "Expected at least 3 runs (text, emoji, text), got {}", runs.len());
+    assert!(
+        runs.len() >= 3,
+        "Expected at least 3 runs (text, emoji, text), got {}",
+        runs.len()
+    );
 
     let first_run = &runs[0];
     let last_run = &runs[runs.len() - 1];
@@ -271,7 +284,11 @@ fn test_ac1_underline_spans_across_emoji_run() {
         .events
         .iter()
         .find_map(|e| match e {
-            SceneEvent::Stroke { bounding_box, width, .. } => Some((bounding_box, *width)),
+            SceneEvent::Stroke {
+                bounding_box,
+                width,
+                ..
+            } => Some((bounding_box, *width)),
             _ => None,
         })
         .expect("Underline stroke event must be generated");
@@ -282,20 +299,26 @@ fn test_ac1_underline_spans_across_emoji_run() {
     assert!(
         (bbox.x0 - expected_start_x).abs() < tol,
         "Underline start ({}) must match layout start ({})",
-        bbox.x0, expected_start_x
+        bbox.x0,
+        expected_start_x
     );
     assert!(
         (bbox.x1 - expected_end_x).abs() < tol,
         "Underline end ({}) must match layout end ({})",
-        bbox.x1, expected_end_x
+        bbox.x1,
+        expected_end_x
     );
     assert!(
         (width - expected_span_width).abs() < tol,
         "Underline width ({}) must equal full span width ({}) across text and emoji",
-        width, expected_span_width
+        width,
+        expected_span_width
     );
 
-    let emoji_run = runs.iter().find(|r| is_emoji_run(r)).expect("Emoji run must exist");
+    let emoji_run = runs
+        .iter()
+        .find(|r| is_emoji_run(r))
+        .expect("Emoji run must exist");
     let emoji_x0 = emoji_run.offset() as f64;
     let emoji_x1 = emoji_x0 + emoji_run.advance() as f64;
 
@@ -360,7 +383,11 @@ fn test_ac1_line_through_and_overline_span_across_emoji_run() {
         .events
         .iter()
         .filter_map(|e| match e {
-            SceneEvent::Stroke { bounding_box, width, .. } => Some((*bounding_box, *width)),
+            SceneEvent::Stroke {
+                bounding_box,
+                width,
+                ..
+            } => Some((*bounding_box, *width)),
             _ => None,
         })
         .collect();
@@ -388,7 +415,10 @@ fn test_ac1_line_through_and_overline_span_across_emoji_run() {
     let expected_end_x = (last_run.offset() + last_run.advance()) as f64;
     let expected_span_width = expected_end_x - expected_start_x;
 
-    let emoji_run = runs.iter().find(|r| is_emoji_run(r)).expect("Emoji run must exist");
+    let emoji_run = runs
+        .iter()
+        .find(|r| is_emoji_run(r))
+        .expect("Emoji run must exist");
     let emoji_x0 = emoji_run.offset() as f64;
     let emoji_x1 = emoji_x0 + emoji_run.advance() as f64;
 
@@ -397,17 +427,20 @@ fn test_ac1_line_through_and_overline_span_across_emoji_run() {
         assert!(
             (bbox.x0 - expected_start_x).abs() < tol,
             "Decoration start ({}) must match layout start ({})",
-            bbox.x0, expected_start_x
+            bbox.x0,
+            expected_start_x
         );
         assert!(
             (bbox.x1 - expected_end_x).abs() < tol,
             "Decoration end ({}) must match layout end ({})",
-            bbox.x1, expected_end_x
+            bbox.x1,
+            expected_end_x
         );
         assert!(
             (width - expected_span_width).abs() < tol,
             "Decoration width ({}) must cover full span ({})",
-            width, expected_span_width
+            width,
+            expected_span_width
         );
         assert!(bbox.x0 < emoji_x0, "Decoration must start before emoji");
         assert!(bbox.x1 > emoji_x1, "Decoration must continue after emoji");
@@ -461,13 +494,7 @@ fn test_ac2_inline_background_covers_emoji_bounds() {
     let layout = &inline_layout.layout;
     let mut scene = RecordingScene::default();
 
-    draw_inline_backgrounds(
-        &mut scene,
-        layout.lines(),
-        &doc,
-        Affine::IDENTITY,
-        root_id,
-    );
+    draw_inline_backgrounds(&mut scene, layout.lines(), &doc, Affine::IDENTITY, root_id);
 
     let fill_events: Vec<_> = scene
         .events
@@ -512,27 +539,32 @@ fn test_ac2_inline_background_covers_emoji_bounds() {
     assert!(
         (fill_rect.x0 - expected_x0).abs() < tol,
         "Background fill x0 ({}) must match emoji offset ({})",
-        fill_rect.x0, expected_x0
+        fill_rect.x0,
+        expected_x0
     );
     assert!(
         (fill_rect.width() - expected_w).abs() < tol,
         "Background fill width ({}) must match emoji advance ({})",
-        fill_rect.width(), expected_w
+        fill_rect.width(),
+        expected_w
     );
     assert!(
         (fill_rect.y0 - expected_y0).abs() < tol,
         "Background fill y0 ({}) must match emoji baseline - ascent ({})",
-        fill_rect.y0, expected_y0
+        fill_rect.y0,
+        expected_y0
     );
     assert!(
         (fill_rect.y1 - expected_y1).abs() < tol,
         "Background fill y1 ({}) must match emoji baseline + descent ({})",
-        fill_rect.y1, expected_y1
+        fill_rect.y1,
+        expected_y1
     );
     assert!(
         (fill_rect.height() - expected_h).abs() < tol,
         "Background fill height ({}) must equal ascent + descent ({})",
-        fill_rect.height(), expected_h
+        fill_rect.height(),
+        expected_h
     );
 }
 
@@ -636,17 +668,20 @@ fn test_ac3_text_selection_covers_emoji_cluster_bounds() {
     assert!(
         (selection_rect.x0 - expected_x0).abs() < tol,
         "Selection start ({}) must match emoji cluster start ({})",
-        selection_rect.x0, expected_x0
+        selection_rect.x0,
+        expected_x0
     );
     assert!(
         (selection_rect.x1 - expected_x1).abs() < tol,
         "Selection end ({}) must match emoji cluster end ({})",
-        selection_rect.x1, expected_x1
+        selection_rect.x1,
+        expected_x1
     );
     assert!(
         (selection_rect.width() - expected_w).abs() < tol,
         "Selection width ({}) must equal emoji cluster advance ({})",
-        selection_rect.width(), expected_w
+        selection_rect.width(),
+        expected_w
     );
 
     // Also verify selection spanning the entire string across text and emoji
@@ -668,7 +703,11 @@ fn test_ac3_text_selection_covers_emoji_cluster_bounds() {
         })
         .collect();
 
-    assert_eq!(full_fill_events.len(), 1, "Full line selection produces 1 rect");
+    assert_eq!(
+        full_fill_events.len(),
+        1,
+        "Full line selection produces 1 rect"
+    );
     let full_rect = full_fill_events[0];
     assert!(
         full_rect.x0 <= selection_rect.x0,
@@ -748,9 +787,16 @@ fn test_ac3_multiple_consecutive_emojis_selection() {
         })
         .collect();
 
-    assert_eq!(fill_events.len(), 1, "Middle emoji selection must produce 1 highlight rect");
+    assert_eq!(
+        fill_events.len(),
+        1,
+        "Middle emoji selection must produce 1 highlight rect"
+    );
     let sel_rect = fill_events[0];
     assert!(sel_rect.width() > 0.0 && sel_rect.width().is_finite());
     assert!(sel_rect.height() > 0.0 && sel_rect.height().is_finite());
-    assert!(sel_rect.x0 > 0.0, "Middle emoji selection must start after the first emoji");
+    assert!(
+        sel_rect.x0 > 0.0,
+        "Middle emoji selection must start after the first emoji"
+    );
 }

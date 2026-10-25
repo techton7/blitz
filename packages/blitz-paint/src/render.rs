@@ -184,7 +184,10 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
         // A document without a root element (e.g. an empty iframe sub-document) has
         // nothing to paint.
         let Some(root_element) = self.dom.as_ref().try_root_element() else {
-            blitz_traits::probe!("blitz-paint::paint_scene", "try_root_element returned None!");
+            blitz_traits::probe!(
+                "blitz-paint::paint_scene",
+                "try_root_element returned None!"
+            );
             return;
         };
         let root_id = root_element.id;
@@ -311,7 +314,16 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
         let display = node.taffy_display();
         let has_styles = node.primary_styles().is_some();
         let size = node.final_layout().size;
-        blitz_traits::probe!("blitz-paint::render_element", "node_id={}, tag='{}', display={:?}, has_styles={}, size=({}x{})", node_id, tag, display, has_styles, size.width, size.height);
+        blitz_traits::probe!(
+            "blitz-paint::render_element",
+            "node_id={}, tag='{}', display={:?}, has_styles={}, size=({}x{})",
+            node_id,
+            tag,
+            display,
+            has_styles,
+            size.width,
+            size.height
+        );
 
         // Early return if the element is hidden
         if matches!(node.taffy_display(), taffy::Display::None) {

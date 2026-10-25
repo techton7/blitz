@@ -27,7 +27,11 @@ pub fn probe_log(tag: &str, msg: &str) {
         return;
     }
     let log_path = std::env::temp_dir().join("blitz-windows-debug.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
         use std::io::Write;
         let _ = writeln!(f, "[PROBE][{tag}] {msg}");
     }
@@ -41,4 +45,3 @@ macro_rules! probe {
         }
     };
 }
-

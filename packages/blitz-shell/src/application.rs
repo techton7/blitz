@@ -159,7 +159,11 @@ impl<Rend: WindowRenderer> ApplicationHandler for BlitzApplication<Rend> {
             return;
         }
 
-        blitz_traits::probe!("blitz-shell::app", "window_event: {:?}", std::mem::discriminant(&event));
+        blitz_traits::probe!(
+            "blitz-shell::app",
+            "window_event: {:?}",
+            std::mem::discriminant(&event)
+        );
         if let Some(window) = self.windows.get_mut(&window_id) {
             window.handle_winit_event(event);
         }
@@ -170,7 +174,11 @@ impl<Rend: WindowRenderer> ApplicationHandler for BlitzApplication<Rend> {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
         blitz_traits::probe!("blitz-shell::app", "proxy_wake_up called");
         while let Ok(event) = self.event_queue.try_recv() {
-            blitz_traits::probe!("blitz-shell::app", "proxy_wake_up event: {:?}", std::mem::discriminant(&event));
+            blitz_traits::probe!(
+                "blitz-shell::app",
+                "proxy_wake_up event: {:?}",
+                std::mem::discriminant(&event)
+            );
             self.handle_blitz_shell_event(event_loop, event);
         }
     }

@@ -31,7 +31,6 @@ use style::bloom::each_relevant_element_hash;
 use style::color::AbsoluteColor;
 use style::data::{ElementDataMut, ElementDataRef};
 use style::global_style_data::STYLE_THREAD_POOL;
-use style_traits::values::ToCss;
 use style::invalidation::element::restyle_hints::RestyleHint;
 use style::properties::ComputedValues;
 use style::properties::{Importance, PropertyDeclaration};
@@ -62,6 +61,7 @@ use style::{
     values::{AtomIdent, GenericAtomIdent},
 };
 use style_dom::ElementState;
+use style_traits::values::ToCss;
 
 use style::values::computed::text::TextAlign as StyloTextAlign;
 

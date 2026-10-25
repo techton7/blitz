@@ -34,7 +34,8 @@ pub fn extract_raster_glyph(
         });
 
         if is_apple_color_emoji {
-            let descender = if let Some(b) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph_id)) {
+            let descender = if let Some(b) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph_id))
+            {
                 if b.y_min < 0 {
                     (b.y_min as f32 * image.pixels_per_em as f32) / (face.units_per_em() as f32)
                 } else {
@@ -83,35 +84,37 @@ mod tests {
 
     #[test]
     fn test_strike_selection_and_png_magic_header() {
-        let font_bytes = create_test_font(
-            &[
-                (16, 16, 16),
-                (32, 32, 32),
-                (64, 64, 64),
-            ],
-            None,
-        );
+        let font_bytes = create_test_font(&[(16, 16, 16), (32, 32, 32), (64, 64, 64)], None);
 
         // Exact strike selection: 16
         let g16 = extract_raster_glyph(&font_bytes, 0, 1, 16).expect("should extract strike 16");
         assert_eq!(g16.strike_ppem, 16);
         assert_eq!(g16.width, 16.0);
         assert_eq!(g16.height, 16.0);
-        assert_eq!(&g16.data[..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        assert_eq!(
+            &g16.data[..8],
+            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        );
 
         // Exact strike selection: 32
         let g32 = extract_raster_glyph(&font_bytes, 0, 1, 32).expect("should extract strike 32");
         assert_eq!(g32.strike_ppem, 32);
         assert_eq!(g32.width, 32.0);
         assert_eq!(g32.height, 32.0);
-        assert_eq!(&g32.data[..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        assert_eq!(
+            &g32.data[..8],
+            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        );
 
         // Exact strike selection: 64
         let g64 = extract_raster_glyph(&font_bytes, 0, 1, 64).expect("should extract strike 64");
         assert_eq!(g64.strike_ppem, 64);
         assert_eq!(g64.width, 64.0);
         assert_eq!(g64.height, 64.0);
-        assert_eq!(&g64.data[..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        assert_eq!(
+            &g64.data[..8],
+            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        );
 
         // Best strike selection for intermediate requests:
         // Request 10 -> chooses strike 16 (first strike >= 10)
@@ -127,7 +130,8 @@ mod tests {
         assert_eq!(g50.strike_ppem, 64);
 
         // Request 128 -> chooses strike 64 (largest strike when request exceeds all strikes)
-        let g128 = extract_raster_glyph(&font_bytes, 0, 1, 128).expect("should match max strike 64");
+        let g128 =
+            extract_raster_glyph(&font_bytes, 0, 1, 128).expect("should match max strike 64");
         assert_eq!(g128.strike_ppem, 64);
     }
 
@@ -152,30 +156,21 @@ mod tests {
     #[test]
     fn test_apple_color_emoji_descender_normalization() {
         // Synthetic font named "Apple Color Emoji" (falls back to -100 units descender)
-        let font_apple = create_test_font(
-            &[(32, 32, 32)],
-            Some("Apple Color Emoji"),
-        );
-        let g_apple = extract_raster_glyph(&font_apple, 0, 1, 32)
-            .expect("should extract raster glyph");
+        let font_apple = create_test_font(&[(32, 32, 32)], Some("Apple Color Emoji"));
+        let g_apple =
+            extract_raster_glyph(&font_apple, 0, 1, 32).expect("should extract raster glyph");
         // Expected origin_y = (-100.0 * 32.0) / 1000.0 = -3.2
         assert_eq!(g_apple.origin_y, -3.2);
         assert_eq!(g_apple.origin_x, 0.0);
 
         // Non-Apple font with image.y == 0 should NOT modify origin_y (remains 0.0)
-        let font_other = create_test_font(
-            &[(32, 32, 32)],
-            Some("Custom Emoji Font"),
-        );
-        let g_other = extract_raster_glyph(&font_other, 0, 1, 32)
-            .expect("should extract raster glyph");
+        let font_other = create_test_font(&[(32, 32, 32)], Some("Custom Emoji Font"));
+        let g_other =
+            extract_raster_glyph(&font_other, 0, 1, 32).expect("should extract raster glyph");
         assert_eq!(g_other.origin_y, 0.0);
     }
 
-    fn create_test_font(
-        strikes: &[(u16, u16, u16)],
-        family_name: Option<&str>,
-    ) -> Vec<u8> {
+    fn create_test_font(strikes: &[(u16, u16, u16)], family_name: Option<&str>) -> Vec<u8> {
         let mut head = Vec::new();
         head.extend_from_slice(&0x00010000u32.to_be_bytes()); // version
         head.extend_from_slice(&0x00010000u32.to_be_bytes()); // fontRevision
@@ -290,11 +285,7 @@ mod tests {
             pad4(&mut sbix);
         }
 
-        let mut tables = vec![
-            (*b"head", head),
-            (*b"hhea", hhea),
-            (*b"maxp", maxp),
-        ];
+        let mut tables = vec![(*b"head", head), (*b"hhea", hhea), (*b"maxp", maxp)];
         if !name_table.is_empty() {
             tables.push((*b"name", name_table));
         }

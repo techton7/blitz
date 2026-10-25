@@ -3,12 +3,12 @@ use blitz_dom::{
     ScrollLogicalPosition as BlitzScrollLogicalPosition,
 };
 use blitz_traits::SmolStr;
+pub use blitz_traits::events::MouseEventButton;
 use blitz_traits::events::{
     BlitzAnimationEvent, BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, BlitzScrollEvent,
     BlitzTransitionEvent, BlitzWheelDelta, BlitzWheelEvent, KeyState, MouseEventButtons,
     PointerCoords, UiEvent,
 };
-pub use blitz_traits::events::MouseEventButton;
 use dioxus_html::{
     AnimationData, CancelData, ClipboardData, CompositionData, DragData, FocusData, FormData,
     FormValue, HasAnimationData, HasFileData, HasFocusData, HasFormData, HasKeyboardData,
@@ -728,11 +728,7 @@ pub fn synthetic_click_event(node: &Node, modifiers: Modifiers) -> Box<dyn Any> 
 
 /// Dispatch a synthetic click event on a target node in `doc`, bubbling up the DOM hierarchy
 /// to locate the nearest Dioxus element listener.
-pub fn dispatch_synthetic_click(
-    doc: &BaseDocument,
-    node_id: NodeId,
-    modifiers: Modifiers,
-) -> bool {
+pub fn dispatch_synthetic_click(doc: &BaseDocument, node_id: NodeId, modifiers: Modifiers) -> bool {
     let mut current = Some(node_id);
     let mut target = None;
     while let Some(id) = current {
@@ -769,10 +765,7 @@ pub fn dispatch_synthetic_click(
 
 /// Dispatch a synthetic focus event on a target node in `doc`.
 /// Sets focus on the Blitz DOM node and dispatches "focus" and "focusin" events to Dioxus listeners.
-pub fn dispatch_synthetic_focus(
-    doc: &mut BaseDocument,
-    node_id: NodeId,
-) -> bool {
+pub fn dispatch_synthetic_focus(doc: &mut BaseDocument, node_id: NodeId) -> bool {
     let mut current = Some(node_id);
     let mut target = None;
     while let Some(id) = current {
@@ -812,11 +805,7 @@ pub fn dispatch_synthetic_focus(
 /// Dispatch a synthetic input/value change on a target node in `doc`.
 /// Updates the Blitz DOM text input editor (if applicable) and dispatches "input" and "change"
 /// events containing the new value to Dioxus listeners.
-pub fn dispatch_synthetic_input(
-    doc: &mut BaseDocument,
-    node_id: NodeId,
-    value: &str,
-) -> bool {
+pub fn dispatch_synthetic_input(doc: &mut BaseDocument, node_id: NodeId, value: &str) -> bool {
     let mut current = Some(node_id);
     let mut target = None;
     while let Some(id) = current {
@@ -896,7 +885,8 @@ pub fn parse_key_str(raw: &str) -> (Key, Code, Modifiers) {
         (Key::Delete, Code::Delete)
     } else if key_part.eq_ignore_ascii_case("arrowleft") || key_part.eq_ignore_ascii_case("left") {
         (Key::ArrowLeft, Code::ArrowLeft)
-    } else if key_part.eq_ignore_ascii_case("arrowright") || key_part.eq_ignore_ascii_case("right") {
+    } else if key_part.eq_ignore_ascii_case("arrowright") || key_part.eq_ignore_ascii_case("right")
+    {
         (Key::ArrowRight, Code::ArrowRight)
     } else if key_part.eq_ignore_ascii_case("arrowup") || key_part.eq_ignore_ascii_case("up") {
         (Key::ArrowUp, Code::ArrowUp)
@@ -961,8 +951,11 @@ pub fn dispatch_synthetic_key(
                         if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
                             let event_data = Box::new(NativeFocusData);
                             let platform_event = Rc::new(PlatformEventData::new(event_data));
-                            let dx_blur = dioxus_core::Event::new(platform_event as Rc<dyn Any>, false);
-                            if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
+                            let dx_blur =
+                                dioxus_core::Event::new(platform_event as Rc<dyn Any>, false);
+                            if let Ok(runtime) =
+                                std::panic::catch_unwind(dioxus_core::Runtime::current)
+                            {
                                 runtime.handle_event("blur", dx_blur, dioxus_id);
                             }
                         }
@@ -974,7 +967,8 @@ pub fn dispatch_synthetic_key(
                 if let Some(dioxus_id) = crate::dioxus_document::get_dioxus_id(node) {
                     let event_data = Box::new(NativeFocusData);
                     let platform_event = Rc::new(PlatformEventData::new(event_data));
-                    let dx_focus = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, false);
+                    let dx_focus =
+                        dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, false);
                     let dx_focusin = dioxus_core::Event::new(platform_event as Rc<dyn Any>, true);
                     if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
                         runtime.handle_event("focus", dx_focus, dioxus_id);
@@ -1006,10 +1000,16 @@ pub fn dispatch_synthetic_key(
     }
 
     // 3. Handle Enter / Space button activation
-    let is_button = doc.get_node(target_node_id).and_then(|n| n.element_data()).is_some_and(|el| {
-        &*el.name.local == "button"
-            || el.attrs().iter().any(|a| &*a.name.local == "role" && a.value == "button")
-    });
+    let is_button = doc
+        .get_node(target_node_id)
+        .and_then(|n| n.element_data())
+        .is_some_and(|el| {
+            &*el.name.local == "button"
+                || el
+                    .attrs()
+                    .iter()
+                    .any(|a| &*a.name.local == "role" && a.value == "button")
+        });
     if is_button && (key == Key::Enter || key == Key::Character(" ".into())) {
         dispatch_synthetic_click(doc, target_node_id, combined_mods);
     }
@@ -1098,7 +1098,10 @@ pub fn dispatch_synthetic_key(
 }
 
 /// Helper to find nearest Dioxus element ID and target NodeId for a given node.
-pub fn find_dioxus_target(doc: &BaseDocument, node_id: NodeId) -> Option<(dioxus_core::ElementId, NodeId)> {
+pub fn find_dioxus_target(
+    doc: &BaseDocument,
+    node_id: NodeId,
+) -> Option<(dioxus_core::ElementId, NodeId)> {
     let mut current = Some(node_id);
     while let Some(id) = current {
         if let Some(node) = doc.get_node(id) {
@@ -1168,17 +1171,21 @@ pub fn dispatch_synthetic_pointer_move(
 
     // 2. Dispatch Dioxus pointer events via Runtime::current
     if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
-        let platform_event = Rc::new(PlatformEventData::new(Box::new(NativePointerData(ptr_event.clone()))));
+        let platform_event = Rc::new(PlatformEventData::new(Box::new(NativePointerData(
+            ptr_event.clone(),
+        ))));
 
         // If hovered target changed, dispatch leave on old and enter on new
         if prev_hover != curr_hover {
             if let Some(prev_id) = prev_hover {
                 if let Some((prev_dx_id, _)) = find_dioxus_target(doc, prev_id) {
-                    let dx_leave = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, false);
+                    let dx_leave =
+                        dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, false);
                     runtime.handle_event("pointerleave", dx_leave.clone(), prev_dx_id);
                     runtime.handle_event("mouseleave", dx_leave, prev_dx_id);
 
-                    let dx_out = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, true);
+                    let dx_out =
+                        dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, true);
                     runtime.handle_event("pointerout", dx_out.clone(), prev_dx_id);
                     runtime.handle_event("mouseout", dx_out, prev_dx_id);
                 }
@@ -1186,11 +1193,13 @@ pub fn dispatch_synthetic_pointer_move(
 
             if let Some(curr_id) = curr_hover {
                 if let Some((curr_dx_id, _)) = find_dioxus_target(doc, curr_id) {
-                    let dx_enter = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, false);
+                    let dx_enter =
+                        dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, false);
                     runtime.handle_event("pointerenter", dx_enter.clone(), curr_dx_id);
                     runtime.handle_event("mouseenter", dx_enter, curr_dx_id);
 
-                    let dx_over = dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, true);
+                    let dx_over =
+                        dioxus_core::Event::new(platform_event.clone() as Rc<dyn Any>, true);
                     runtime.handle_event("pointerover", dx_over.clone(), curr_dx_id);
                     runtime.handle_event("mouseover", dx_over, curr_dx_id);
                 }
@@ -1224,8 +1233,7 @@ pub fn dispatch_synthetic_pointer_down(
         get_node_center_coords(doc, nid)
             .ok_or_else(|| format!("Target node #{:?} not found for pointer down", nid))?
     } else if let Some(nid) = doc.get_hover_node_id() {
-        get_node_center_coords(doc, nid)
-            .unwrap_or((0.0, 0.0))
+        get_node_center_coords(doc, nid).unwrap_or((0.0, 0.0))
     } else {
         (0.0, 0.0)
     };
@@ -1264,7 +1272,9 @@ pub fn dispatch_synthetic_pointer_down(
     // 2. Dispatch Dioxus pointerdown and mousedown events
     if let Some((dioxus_id, _)) = find_dioxus_target(doc, resolved_nid) {
         if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
-            let platform_event = Rc::new(PlatformEventData::new(Box::new(NativePointerData(ptr_event))));
+            let platform_event = Rc::new(PlatformEventData::new(Box::new(NativePointerData(
+                ptr_event,
+            ))));
             let dx_down = dioxus_core::Event::new(platform_event as Rc<dyn Any>, true);
             runtime.handle_event("pointerdown", dx_down.clone(), dioxus_id);
             runtime.handle_event("mousedown", dx_down, dioxus_id);
@@ -1290,8 +1300,7 @@ pub fn dispatch_synthetic_pointer_up(
         get_node_center_coords(doc, nid)
             .ok_or_else(|| format!("Target node #{:?} not found for pointer up", nid))?
     } else if let Some(nid) = doc.get_hover_node_id() {
-        get_node_center_coords(doc, nid)
-            .unwrap_or((0.0, 0.0))
+        get_node_center_coords(doc, nid).unwrap_or((0.0, 0.0))
     } else {
         (0.0, 0.0)
     };
@@ -1325,7 +1334,9 @@ pub fn dispatch_synthetic_pointer_up(
     // 2. Dispatch Dioxus pointerup and mouseup events
     if let Some((dioxus_id, _)) = find_dioxus_target(doc, resolved_nid) {
         if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
-            let platform_event = Rc::new(PlatformEventData::new(Box::new(NativePointerData(ptr_event))));
+            let platform_event = Rc::new(PlatformEventData::new(Box::new(NativePointerData(
+                ptr_event,
+            ))));
             let dx_up = dioxus_core::Event::new(platform_event as Rc<dyn Any>, true);
             runtime.handle_event("pointerup", dx_up.clone(), dioxus_id);
             runtime.handle_event("mouseup", dx_up, dioxus_id);
@@ -1351,8 +1362,7 @@ pub fn dispatch_synthetic_wheel(
         get_node_center_coords(doc, nid)
             .ok_or_else(|| format!("Target node #{:?} not found for wheel", nid))?
     } else if let Some(nid) = doc.get_hover_node_id() {
-        get_node_center_coords(doc, nid)
-            .unwrap_or((0.0, 0.0))
+        get_node_center_coords(doc, nid).unwrap_or((0.0, 0.0))
     } else {
         (0.0, 0.0)
     };
@@ -1360,7 +1370,8 @@ pub fn dispatch_synthetic_wheel(
     // Ensure hover position is set at scroll point
     let _ = doc.set_hover_to(x, y);
 
-    let resolved_nid = doc.get_hover_node_id()
+    let resolved_nid = doc
+        .get_hover_node_id()
         .or(target_node_id)
         .unwrap_or_else(|| doc.root_node().id);
 
@@ -1385,7 +1396,9 @@ pub fn dispatch_synthetic_wheel(
     // 2. Dispatch Dioxus wheel and scroll events
     if let Some((dioxus_id, target_actual_id)) = find_dioxus_target(doc, resolved_nid) {
         if let Ok(runtime) = std::panic::catch_unwind(dioxus_core::Runtime::current) {
-            let platform_wheel = Rc::new(PlatformEventData::new(Box::new(NativeWheelData(wheel_event))));
+            let platform_wheel = Rc::new(PlatformEventData::new(Box::new(NativeWheelData(
+                wheel_event,
+            ))));
             let dx_wheel = dioxus_core::Event::new(platform_wheel as Rc<dyn Any>, true);
             runtime.handle_event("wheel", dx_wheel, dioxus_id);
 
@@ -1401,7 +1414,9 @@ pub fn dispatch_synthetic_wheel(
                     client_width: layout.size.width as i32,
                     client_height: layout.size.height as i32,
                 };
-                let platform_scroll = Rc::new(PlatformEventData::new(Box::new(NativeScrollData(scroll_evt))));
+                let platform_scroll = Rc::new(PlatformEventData::new(Box::new(NativeScrollData(
+                    scroll_evt,
+                ))));
                 let dx_scroll = dioxus_core::Event::new(platform_scroll as Rc<dyn Any>, false);
                 runtime.handle_event("scroll", dx_scroll, dioxus_id);
             }
@@ -1533,14 +1548,25 @@ mod tests {
         let focused = dispatch_synthetic_focus(&mut doc.inner.borrow_mut(), input_id);
         assert!(focused, "dispatch_synthetic_focus must return true");
         doc.poll(None);
-        assert!(*focused_signal.borrow(), "onfocus handler must have fired and updated signal");
+        assert!(
+            *focused_signal.borrow(),
+            "onfocus handler must have fired and updated signal"
+        );
         assert_eq!(doc.inner.borrow().get_focussed_node_id(), Some(input_id));
 
         // 2. Dispatch synthetic input
-        let input_dispatched = dispatch_synthetic_input(&mut doc.inner.borrow_mut(), input_id, "hello world");
-        assert!(input_dispatched, "dispatch_synthetic_input must return true");
+        let input_dispatched =
+            dispatch_synthetic_input(&mut doc.inner.borrow_mut(), input_id, "hello world");
+        assert!(
+            input_dispatched,
+            "dispatch_synthetic_input must return true"
+        );
         doc.poll(None);
-        assert_eq!(*typed_signal.borrow(), "hello world", "oninput handler must receive new value");
+        assert_eq!(
+            *typed_signal.borrow(),
+            "hello world",
+            "oninput handler must receive new value"
+        );
     }
 
     #[test]
@@ -1619,36 +1645,64 @@ mod tests {
         let _guard = dioxus_core::RuntimeGuard::new(doc.vdom.runtime());
 
         // 1. Focus traversal via Tab
-        let tab1 = dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Tab", Modifiers::empty()).unwrap();
+        let tab1 =
+            dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Tab", Modifiers::empty())
+                .unwrap();
         assert_eq!(tab1, input_id, "Tab from initial state should focus input");
         doc.poll(None);
         assert!(*input_focused.borrow(), "Input onfocus must have run");
         assert!(!*btn_focused.borrow());
 
         // Tab again to focus button
-        let tab2 = dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Tab", Modifiers::empty()).unwrap();
+        let tab2 =
+            dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Tab", Modifiers::empty())
+                .unwrap();
         assert_eq!(tab2, btn_id, "Tab from input should focus button");
         doc.poll(None);
         assert!(!*input_focused.borrow(), "Input onblur must have run");
         assert!(*btn_focused.borrow(), "Button onfocus must have run");
 
         // Shift+Tab back to input
-        let stab = dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Shift+Tab", Modifiers::empty()).unwrap();
+        let stab = dispatch_synthetic_key(
+            &mut doc.inner.borrow_mut(),
+            None,
+            "Shift+Tab",
+            Modifiers::empty(),
+        )
+        .unwrap();
         assert_eq!(stab, input_id, "Shift+Tab should focus input again");
         doc.poll(None);
         assert!(*input_focused.borrow(), "Input onfocus must have run again");
         assert!(!*btn_focused.borrow(), "Button onblur must have run");
 
         // 2. Text editing via typing and Backspace
-        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "a", Modifiers::empty()).unwrap();
+        dispatch_synthetic_key(
+            &mut doc.inner.borrow_mut(),
+            Some(input_id),
+            "a",
+            Modifiers::empty(),
+        )
+        .unwrap();
         doc.poll(None);
         assert_eq!(*typed.borrow(), "a");
 
-        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "c", Modifiers::empty()).unwrap();
+        dispatch_synthetic_key(
+            &mut doc.inner.borrow_mut(),
+            Some(input_id),
+            "c",
+            Modifiers::empty(),
+        )
+        .unwrap();
         doc.poll(None);
         assert_eq!(*typed.borrow(), "ac");
 
-        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "Backspace", Modifiers::empty()).unwrap();
+        dispatch_synthetic_key(
+            &mut doc.inner.borrow_mut(),
+            Some(input_id),
+            "Backspace",
+            Modifiers::empty(),
+        )
+        .unwrap();
         doc.poll(None);
         assert_eq!(*typed.borrow(), "a");
 
@@ -1658,29 +1712,66 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         let action_mod = Modifiers::CONTROL;
 
-        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "a", action_mod).unwrap();
-        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "z", Modifiers::empty()).unwrap();
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(input_id), "a", action_mod)
+            .unwrap();
+        dispatch_synthetic_key(
+            &mut doc.inner.borrow_mut(),
+            Some(input_id),
+            "z",
+            Modifiers::empty(),
+        )
+        .unwrap();
         doc.poll(None);
-        assert_eq!(*typed.borrow(), "z", "Cmd/Ctrl + A followed by typing 'z' must replace entire text");
+        assert_eq!(
+            *typed.borrow(),
+            "z",
+            "Cmd/Ctrl + A followed by typing 'z' must replace entire text"
+        );
 
         // 4. Button activation via Enter and Space
-        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Tab", Modifiers::empty()).unwrap();
+        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Tab", Modifiers::empty())
+            .unwrap();
         doc.poll(None);
         assert_eq!(doc.inner.borrow().get_focussed_node_id(), Some(btn_id));
 
-        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(btn_id), "Enter", Modifiers::empty()).unwrap();
+        dispatch_synthetic_key(
+            &mut doc.inner.borrow_mut(),
+            Some(btn_id),
+            "Enter",
+            Modifiers::empty(),
+        )
+        .unwrap();
         doc.poll(None);
         assert_eq!(*clicks.borrow(), 1, "Enter on button must trigger click");
 
-        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), Some(btn_id), "Space", Modifiers::empty()).unwrap();
+        dispatch_synthetic_key(
+            &mut doc.inner.borrow_mut(),
+            Some(btn_id),
+            "Space",
+            Modifiers::empty(),
+        )
+        .unwrap();
         doc.poll(None);
         assert_eq!(*clicks.borrow(), 2, "Space on button must trigger click");
 
         // 5. Escape clears focus
-        dispatch_synthetic_key(&mut doc.inner.borrow_mut(), None, "Escape", Modifiers::empty()).unwrap();
+        dispatch_synthetic_key(
+            &mut doc.inner.borrow_mut(),
+            None,
+            "Escape",
+            Modifiers::empty(),
+        )
+        .unwrap();
         doc.poll(None);
-        assert_eq!(doc.inner.borrow().active_focus_node_id(), None, "Escape must clear explicit focus");
-        assert!(!*btn_focused.borrow(), "Button onblur must have run on Escape");
+        assert_eq!(
+            doc.inner.borrow().active_focus_node_id(),
+            None,
+            "Escape must clear explicit focus"
+        );
+        assert!(
+            !*btn_focused.borrow(),
+            "Button onblur must have run on Escape"
+        );
     }
 
     #[test]
@@ -1745,7 +1836,11 @@ mod tests {
         doc.initial_build();
         doc.inner.borrow_mut().resolve(0.0);
 
-        let target_id = doc.inner.borrow().get_element_by_id("pointer-target").unwrap();
+        let target_id = doc
+            .inner
+            .borrow()
+            .get_element_by_id("pointer-target")
+            .unwrap();
         let _guard = dioxus_core::RuntimeGuard::new(doc.vdom.runtime());
 
         // 1. Synthetic Pointer Move / Hover
@@ -1754,7 +1849,8 @@ mod tests {
             Some(target_id),
             None,
             Modifiers::empty(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(move_res, target_id);
         doc.poll(None);
         assert_eq!(doc.inner.borrow().get_hover_node_id(), Some(target_id));
@@ -1768,7 +1864,8 @@ mod tests {
             None,
             MouseEventButton::Main,
             Modifiers::empty(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(down_res, target_id);
         doc.poll(None);
         assert!(doc.inner.borrow().get_node(target_id).unwrap().is_active());
@@ -1781,11 +1878,15 @@ mod tests {
             None,
             MouseEventButton::Main,
             Modifiers::empty(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(up_res, target_id);
         doc.poll(None);
         assert!(!doc.inner.borrow().get_node(target_id).unwrap().is_active());
-        assert!(!*pressed.borrow(), "onpointerup handler must have reset pressed state");
+        assert!(
+            !*pressed.borrow(),
+            "onpointerup handler must have reset pressed state"
+        );
 
         // 4. Synthetic Wheel
         let wheel_res = dispatch_synthetic_wheel(
@@ -1795,9 +1896,14 @@ mod tests {
             0.0,
             42.0,
             Modifiers::empty(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(wheel_res, target_id);
         doc.poll(None);
-        assert_eq!(*wheel_delta_y.borrow(), 42.0, "onwheel handler must have observed delta_y");
+        assert_eq!(
+            *wheel_delta_y.borrow(),
+            42.0,
+            "onwheel handler must have observed delta_y"
+        );
     }
 }

@@ -431,7 +431,10 @@ impl<Rend: WindowRenderer> View<Rend> {
         if !is_blocked && is_visible {
             blitz_traits::probe!("blitz-shell::redraw", "calling self.renderer.render");
             self.renderer.render(|scene| {
-                blitz_traits::probe!("blitz-shell::redraw", "inside render closure, calling paint_scene");
+                blitz_traits::probe!(
+                    "blitz-shell::redraw",
+                    "inside render closure, calling paint_scene"
+                );
                 paint_scene(
                     scene,
                     &mut inner,
@@ -448,7 +451,11 @@ impl<Rend: WindowRenderer> View<Rend> {
 
         blitz_traits::probe!("blitz-shell::redraw", "about to drop inner");
         drop(inner);
-        blitz_traits::probe!("blitz-shell::redraw", "inner dropped, is_animating={}", is_animating);
+        blitz_traits::probe!(
+            "blitz-shell::redraw",
+            "inner dropped, is_animating={}",
+            is_animating
+        );
 
         if !is_blocked && is_visible && is_animating {
             self.request_redraw();

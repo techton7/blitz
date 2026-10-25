@@ -10,11 +10,11 @@ use style::values::computed::{
 };
 use style::values::generics::text::{GenericTextDecorationInset, GenericTextDecorationLength};
 
+use crate::bitmap_glyph::{
+    BitmapCacheKey, BitmapGlyphCache, compute_bitmap_placement_transform, extract_raster_glyph,
+};
 use crate::color::{Color, ToColorColor as _};
 use crate::{FONT_EMBOLDEN_ENABLED, SELECTION_COLOR};
-use crate::bitmap_glyph::{
-    compute_bitmap_placement_transform, extract_raster_glyph, BitmapCacheKey, BitmapGlyphCache,
-};
 
 /// Draw the backgrounds of inline elements (e.g. `<span style="background: ...">`).
 ///
@@ -252,10 +252,7 @@ pub struct DrawTextContext {
 }
 
 impl DrawTextContext {
-    pub fn with_bitmap_glyph_cache<R>(
-        &mut self,
-        f: impl FnOnce(&mut BitmapGlyphCache) -> R,
-    ) -> R {
+    pub fn with_bitmap_glyph_cache<R>(&mut self, f: impl FnOnce(&mut BitmapGlyphCache) -> R) -> R {
         if let Some(ref mut cache) = self.custom_bitmap_glyph_cache {
             f(cache)
         } else {
@@ -661,10 +658,16 @@ pub fn stroke_text<'a>(
                 let face_index = font.index;
                 let font_key = font.data.id();
                 let parsed_face = ttf_parser::Face::parse(font_blob, face_index).ok();
-                let has_raster_tables = parsed_face.as_ref().map(|f| {
-                    let tables = f.tables();
-                    tables.sbix.is_some() || tables.cbdt.is_some() || tables.ebdt.is_some() || tables.bdat.is_some()
-                }).unwrap_or(false);
+                let has_raster_tables = parsed_face
+                    .as_ref()
+                    .map(|f| {
+                        let tables = f.tables();
+                        tables.sbix.is_some()
+                            || tables.cbdt.is_some()
+                            || tables.ebdt.is_some()
+                            || tables.bdat.is_some()
+                    })
+                    .unwrap_or(false);
 
                 if !has_raster_tables {
                     let normalized_coords: &[i16] = bytemuck::cast_slice(run.normalized_coords());
@@ -692,7 +695,8 @@ pub fn stroke_text<'a>(
 
                     for glyph in glyph_run.positioned_glyphs() {
                         let glyph_id = glyph.id as u16;
-                        let raster_glyph = extract_raster_glyph(font_blob, face_index, glyph_id, target_ppem);
+                        let raster_glyph =
+                            extract_raster_glyph(font_blob, face_index, glyph_id, target_ppem);
                         if let Some(raster_glyph) = raster_glyph {
                             // Flush preceding vector glyphs to preserve exact draw order
                             if !vector_glyphs_scratch.is_empty() {
@@ -727,12 +731,13 @@ pub fn stroke_text<'a>(
                             };
 
                             if let Some(image_data) = maybe_image {
-                                let (placement_transform, _bounds) = compute_bitmap_placement_transform(
-                                    glyph.x,
-                                    glyph.y,
-                                    font_size,
-                                    &raster_glyph,
-                                );
+                                let (placement_transform, _bounds) =
+                                    compute_bitmap_placement_transform(
+                                        glyph.x,
+                                        glyph.y,
+                                        font_size,
+                                        &raster_glyph,
+                                    );
                                 let glyph_transform = transform * placement_transform;
                                 scene.draw_image((&image_data).into(), glyph_transform);
                             }

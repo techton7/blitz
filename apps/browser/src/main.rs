@@ -98,8 +98,8 @@ fn main() {
             Box::new(initial_url_ctx.clone()) as Box<dyn std::any::Any>
         })];
 
-    let config = dioxus_native::Config::default()
-        .with_alpha_mode(anyrender::CompositeAlphaMode::Opaque);
+    let config =
+        dioxus_native::Config::default().with_alpha_mode(anyrender::CompositeAlphaMode::Opaque);
 
     dioxus_native::launch_cfg(
         app,

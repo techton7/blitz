@@ -94,7 +94,7 @@ pub use blitz_traits::node_id::NodeId;
 pub use config::{DocumentConfig, StyleThreading};
 pub use document::{
     BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, PlainDocument,
-    QueuedAnimationEvent, UserAgentStylesheet,
+    QueuedAnimationEvent,
 };
 pub use markup5ever::{
     LocalName, Namespace, NamespaceStaticSet, Prefix, PrefixStaticSet, QualName, local_name,

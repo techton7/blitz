@@ -2,17 +2,17 @@
 
 #![cfg(target_os = "macos")]
 
-use std::sync::Arc;
 use anyrender::{PaintRef, PaintScene, RenderContext};
 use blitz_dom::{BaseDocument, DocumentConfig, NodeId, node::TextBrush};
 use blitz_paint::bitmap_glyph::{
-    compute_bitmap_placement_transform, extract_raster_glyph, BitmapGlyphCache,
+    BitmapGlyphCache, compute_bitmap_placement_transform, extract_raster_glyph,
 };
-use blitz_paint::text::{stroke_text, DrawTextContext};
+use blitz_paint::text::{DrawTextContext, stroke_text};
 use kurbo::{Affine, Rect, Shape, Stroke};
-use parley::style::StyleProperty;
 use parley::LayoutContext;
+use parley::style::StyleProperty;
 use peniko::{BlendMode, Color, Fill, FontData, ImageBrushRef, StyleRef};
+use std::sync::Arc;
 
 const APPLE_COLOR_EMOJI_PATH: &str = "/System/Library/Fonts/Apple Color Emoji.ttc";
 const HELVETICA_PATH: &str = "/System/Library/Fonts/Helvetica.ttc";
@@ -207,7 +207,11 @@ fn test_hybrid_dispatch_mixed_run_draw_order_preservation() {
 
     match &scene.events[0] {
         SceneEvent::DrawGlyphs { glyph_ids, .. } => {
-            assert_eq!(glyph_ids.len(), 1, "Leading run must contain 1 vector glyph (space)");
+            assert_eq!(
+                glyph_ids.len(),
+                1,
+                "Leading run must contain 1 vector glyph (space)"
+            );
         }
         other => panic!("Expected first event to be DrawGlyphs, got {:?}", other),
     }
@@ -222,7 +226,11 @@ fn test_hybrid_dispatch_mixed_run_draw_order_preservation() {
 
     match &scene.events[2] {
         SceneEvent::DrawGlyphs { glyph_ids, .. } => {
-            assert_eq!(glyph_ids.len(), 1, "Trailing run must contain 1 vector glyph (space)");
+            assert_eq!(
+                glyph_ids.len(),
+                1,
+                "Trailing run must contain 1 vector glyph (space)"
+            );
         }
         other => panic!("Expected third event to be DrawGlyphs, got {:?}", other),
     }
@@ -260,14 +268,21 @@ fn test_hybrid_dispatch_multiple_consecutive_emojis() {
     let mut last_x = -1.0f64;
     for (i, event) in scene.events.iter().enumerate() {
         match event {
-            SceneEvent::DrawImage { width, height, transform, .. } => {
+            SceneEvent::DrawImage {
+                width,
+                height,
+                transform,
+                ..
+            } => {
                 assert_eq!(*width, 32);
                 assert_eq!(*height, 32);
                 let x = transform.as_coeffs()[4];
                 assert!(
                     x > last_x,
                     "Emoji #{} horizontal translation ({}) must be strictly greater than preceding emoji ({})",
-                    i, x, last_x
+                    i,
+                    x,
+                    last_x
                 );
                 last_x = x;
             }
@@ -432,8 +447,9 @@ fn test_hybrid_dispatch_baseline_and_placement_exact_geometry() {
         .unwrap();
     let glyph = glyph_run.positioned_glyphs().next().unwrap();
 
-    let raster_glyph = extract_raster_glyph(&font_bytes, 0, glyph.id as u16, font_size.round() as u16)
-        .expect("Raster glyph must extract");
+    let raster_glyph =
+        extract_raster_glyph(&font_bytes, 0, glyph.id as u16, font_size.round() as u16)
+            .expect("Raster glyph must extract");
 
     let (expected_placement_transform, _bounds) =
         compute_bitmap_placement_transform(glyph.x, glyph.y, font_size, &raster_glyph);
@@ -448,7 +464,9 @@ fn test_hybrid_dispatch_baseline_and_placement_exact_geometry() {
                 assert!(
                     (actual[i] - expected[i]).abs() < tol,
                     "Transform coefficient [{}] mismatch: actual {} vs expected {}",
-                    i, actual[i], expected[i]
+                    i,
+                    actual[i],
+                    expected[i]
                 );
             }
         }
@@ -503,8 +521,13 @@ fn test_task10_synthetic_embolden_bypassed_for_bitmap_glyphs() {
         .unwrap();
     let emoji_glyph = glyph_run.positioned_glyphs().nth(1).unwrap();
 
-    let raster_glyph = extract_raster_glyph(&font_bytes, 0, emoji_glyph.id as u16, font_size.round() as u16)
-        .expect("Raster glyph must extract");
+    let raster_glyph = extract_raster_glyph(
+        &font_bytes,
+        0,
+        emoji_glyph.id as u16,
+        font_size.round() as u16,
+    )
+    .expect("Raster glyph must extract");
 
     let (expected_placement_transform, _bounds) =
         compute_bitmap_placement_transform(emoji_glyph.x, emoji_glyph.y, font_size, &raster_glyph);
@@ -518,11 +541,12 @@ fn test_task10_synthetic_embolden_bypassed_for_bitmap_glyphs() {
                 assert!(
                     (actual[i] - expected[i]).abs() < tol,
                     "Transform coefficient [{}] mismatch: actual {} vs expected {}",
-                    i, actual[i], expected[i]
+                    i,
+                    actual[i],
+                    expected[i]
                 );
             }
         }
         other => panic!("Expected DrawImage, got {:?}", other),
     }
 }
-

@@ -34,7 +34,6 @@ use crate::{
 impl BaseDocument {
     /// Restyle the tree and then relayout it
     pub fn resolve(&mut self, current_time_for_animations: f64) {
-
         // Process messages that have been sent to our message channel (e.g. loaded resource)
         self.handle_messages();
 
@@ -55,7 +54,11 @@ impl BaseDocument {
             );
             return;
         }
-        blitz_traits::probe!("blitz-dom::resolve", "proceeding with normal style and layout resolution (pending_count={})", self.pending_critical_resources.len());
+        blitz_traits::probe!(
+            "blitz-dom::resolve",
+            "proceeding with normal style and layout resolution (pending_count={})",
+            self.pending_critical_resources.len()
+        );
 
         self.resolve_scroll_animation();
 

@@ -439,7 +439,6 @@ mod tests {
         assert_eq!(main.children.len(), 100);
     }
 
-
     #[test]
     fn attributes_have_empty_namespace_on_mounted_element() {
         use blitz_dom::ns;
@@ -748,4 +747,3 @@ mod tests {
         assert_eq!(*log.0.borrow(), vec!["opacity".to_string()]);
     }
 }
-

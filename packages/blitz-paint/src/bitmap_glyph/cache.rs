@@ -1,7 +1,7 @@
+use peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
-use peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
 
 pub const DEFAULT_MAX_ENTRIES: usize = 512;
 pub const DEFAULT_MAX_BYTES: usize = 16 * 1024 * 1024; // 16 MB
@@ -85,11 +85,7 @@ impl BitmapGlyphCache {
     ///
     /// Preserves the [`Blob`] identity for subsequent accesses so downstream renderers
     /// (e.g. Vello GPU texture atlases) can avoid texture re-uploads.
-    pub fn get_or_decode(
-        &mut self,
-        key: BitmapCacheKey,
-        png_bytes: &[u8],
-    ) -> Option<ImageData> {
+    pub fn get_or_decode(&mut self, key: BitmapCacheKey, png_bytes: &[u8]) -> Option<ImageData> {
         self.access_counter = self.access_counter.wrapping_add(1);
 
         if let Some(entry) = self.entries.get_mut(&key) {
@@ -205,7 +201,9 @@ mod tests {
             encoder.set_color(color_type);
             encoder.set_depth(png::BitDepth::Eight);
             let mut writer = encoder.write_header().expect("write header");
-            writer.write_image_data(raw_pixels).expect("write image data");
+            writer
+                .write_image_data(raw_pixels)
+                .expect("write image data");
         }
         png_bytes
     }
@@ -213,10 +211,10 @@ mod tests {
     #[test]
     fn test_decode_rgba8_png() {
         let pixels = [
-            255, 0, 0, 255,    // Red
-            0, 255, 0, 128,    // Green (half alpha)
-            0, 0, 255, 255,    // Blue
-            255, 255, 0, 200,  // Yellow
+            255, 0, 0, 255, // Red
+            0, 255, 0, 128, // Green (half alpha)
+            0, 0, 255, 255, // Blue
+            255, 255, 0, 200, // Yellow
         ];
         let png = create_test_png(2, 2, png::ColorType::Rgba, &pixels);
 
@@ -231,8 +229,8 @@ mod tests {
     #[test]
     fn test_decode_rgb8_png() {
         let pixels = [
-            255, 0, 0,   // Red
-            0, 255, 0,   // Green
+            255, 0, 0, // Red
+            0, 255, 0, // Green
         ];
         let png = create_test_png(2, 1, png::ColorType::Rgb, &pixels);
 
@@ -287,8 +285,12 @@ mod tests {
         let pixels = [10, 20, 30, 40];
         let png = create_test_png(1, 1, png::ColorType::Rgba, &pixels);
 
-        let img1 = cache.get_or_decode(key, &png).expect("first decode should succeed");
-        let img2 = cache.get_or_decode(key, &png).expect("cache hit should succeed");
+        let img1 = cache
+            .get_or_decode(key, &png)
+            .expect("first decode should succeed");
+        let img2 = cache
+            .get_or_decode(key, &png)
+            .expect("cache hit should succeed");
 
         // CRITICAL: blob ID must match for Vello GPU atlas reuse
         assert_eq!(img1.data.id(), img2.data.id());
@@ -302,10 +304,30 @@ mod tests {
 
         let png = create_test_png(1, 1, png::ColorType::Rgba, &[1, 2, 3, 4]);
 
-        let key1 = BitmapCacheKey { font_key: 1, face_index: 0, glyph_id: 1, strike_ppem: 16 };
-        let key2 = BitmapCacheKey { font_key: 1, face_index: 0, glyph_id: 2, strike_ppem: 16 };
-        let key3 = BitmapCacheKey { font_key: 1, face_index: 0, glyph_id: 3, strike_ppem: 16 };
-        let key4 = BitmapCacheKey { font_key: 1, face_index: 0, glyph_id: 4, strike_ppem: 16 };
+        let key1 = BitmapCacheKey {
+            font_key: 1,
+            face_index: 0,
+            glyph_id: 1,
+            strike_ppem: 16,
+        };
+        let key2 = BitmapCacheKey {
+            font_key: 1,
+            face_index: 0,
+            glyph_id: 2,
+            strike_ppem: 16,
+        };
+        let key3 = BitmapCacheKey {
+            font_key: 1,
+            face_index: 0,
+            glyph_id: 3,
+            strike_ppem: 16,
+        };
+        let key4 = BitmapCacheKey {
+            font_key: 1,
+            face_index: 0,
+            glyph_id: 4,
+            strike_ppem: 16,
+        };
 
         let img1 = cache.get_or_decode(key1, &png).unwrap();
         let _ = cache.get_or_decode(key2, &png).unwrap();
@@ -341,9 +363,24 @@ mod tests {
 
         let png = create_test_png(1, 1, png::ColorType::Rgba, &[1, 2, 3, 4]);
 
-        let key1 = BitmapCacheKey { font_key: 1, face_index: 0, glyph_id: 1, strike_ppem: 16 };
-        let key2 = BitmapCacheKey { font_key: 1, face_index: 0, glyph_id: 2, strike_ppem: 16 };
-        let key3 = BitmapCacheKey { font_key: 1, face_index: 0, glyph_id: 3, strike_ppem: 16 };
+        let key1 = BitmapCacheKey {
+            font_key: 1,
+            face_index: 0,
+            glyph_id: 1,
+            strike_ppem: 16,
+        };
+        let key2 = BitmapCacheKey {
+            font_key: 1,
+            face_index: 0,
+            glyph_id: 2,
+            strike_ppem: 16,
+        };
+        let key3 = BitmapCacheKey {
+            font_key: 1,
+            face_index: 0,
+            glyph_id: 3,
+            strike_ppem: 16,
+        };
 
         let _ = cache.get_or_decode(key1, &png).unwrap();
         assert_eq!(cache.current_bytes(), 4);
@@ -364,7 +401,12 @@ mod tests {
         // Cache max bytes = 2. A 1x1 RGBA image is 4 bytes.
         let mut cache = BitmapGlyphCache::with_bounds(10, 2);
         let png = create_test_png(1, 1, png::ColorType::Rgba, &[1, 2, 3, 4]);
-        let key = BitmapCacheKey { font_key: 1, face_index: 0, glyph_id: 1, strike_ppem: 16 };
+        let key = BitmapCacheKey {
+            font_key: 1,
+            face_index: 0,
+            glyph_id: 1,
+            strike_ppem: 16,
+        };
 
         let img = cache.get_or_decode(key, &png);
         assert!(img.is_some());

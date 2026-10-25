@@ -699,6 +699,9 @@ mod tests {
             }
             _ => panic!("unexpected event"),
         }
-        assert!(rx.try_recv().is_err(), "should not emit duplicate event on drop");
+        assert!(
+            rx.try_recv().is_err(),
+            "should not emit duplicate event on drop"
+        );
     }
 }

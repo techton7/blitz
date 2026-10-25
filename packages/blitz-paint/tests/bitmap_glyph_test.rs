@@ -3,7 +3,7 @@
 #![cfg(target_os = "macos")]
 
 use blitz_paint::bitmap_glyph::{
-    compute_bitmap_placement_transform, extract_raster_glyph, BitmapCacheKey, BitmapGlyphCache,
+    BitmapCacheKey, BitmapGlyphCache, compute_bitmap_placement_transform, extract_raster_glyph,
 };
 use kurbo::Point;
 use peniko::{ImageAlphaType, ImageFormat};
@@ -18,7 +18,9 @@ fn load_apple_color_emoji() -> Option<Vec<u8>> {
 #[test]
 fn test_apple_color_emoji_contract_representative_glyphs() {
     let Some(font_bytes) = load_apple_color_emoji() else {
-        eprintln!("Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}");
+        eprintln!(
+            "Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}"
+        );
         return;
     };
 
@@ -40,8 +42,9 @@ fn test_apple_color_emoji_contract_representative_glyphs() {
         let gid = face
             .glyph_index(ch)
             .unwrap_or_else(|| panic!("Glyph index for character '{ch}' should exist"));
-        let glyph = extract_raster_glyph(&font_bytes, 0, gid.0, 32)
-            .unwrap_or_else(|| panic!("Raster glyph for character '{ch}' (glyph ID {gid:?}) should be extracted"));
+        let glyph = extract_raster_glyph(&font_bytes, 0, gid.0, 32).unwrap_or_else(|| {
+            panic!("Raster glyph for character '{ch}' (glyph ID {gid:?}) should be extracted")
+        });
 
         assert_eq!(
             &glyph.data[..8],
@@ -50,7 +53,10 @@ fn test_apple_color_emoji_contract_representative_glyphs() {
         );
         assert!(glyph.width > 0.0, "Glyph width must be positive");
         assert!(glyph.height > 0.0, "Glyph height must be positive");
-        assert_eq!(glyph.strike_ppem, 32, "Requested ppem 32 should yield strike ppem 32");
+        assert_eq!(
+            glyph.strike_ppem, 32,
+            "Requested ppem 32 should yield strike ppem 32"
+        );
     }
 
     // Direct bitmap glyph index (first available sbix glyph in Apple Color Emoji)
@@ -65,7 +71,9 @@ fn test_apple_color_emoji_contract_representative_glyphs() {
 #[test]
 fn test_apple_color_emoji_contract_origin_y_descender_normalization() {
     let Some(font_bytes) = load_apple_color_emoji() else {
-        eprintln!("Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}");
+        eprintln!(
+            "Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}"
+        );
         return;
     };
 
@@ -105,7 +113,9 @@ fn test_apple_color_emoji_contract_origin_y_descender_normalization() {
 #[test]
 fn test_apple_color_emoji_contract_discrete_strike_sizes() {
     let Some(font_bytes) = load_apple_color_emoji() else {
-        eprintln!("Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}");
+        eprintln!(
+            "Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}"
+        );
         return;
     };
 
@@ -140,7 +150,9 @@ fn test_apple_color_emoji_contract_discrete_strike_sizes() {
 #[test]
 fn test_apple_color_emoji_contract_intermediate_strike_selection() {
     let Some(font_bytes) = load_apple_color_emoji() else {
-        eprintln!("Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}");
+        eprintln!(
+            "Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}"
+        );
         return;
     };
 
@@ -176,7 +188,9 @@ fn test_apple_color_emoji_contract_intermediate_strike_selection() {
 #[test]
 fn test_apple_color_emoji_pipeline_integration() {
     let Some(font_bytes) = load_apple_color_emoji() else {
-        eprintln!("Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}");
+        eprintln!(
+            "Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}"
+        );
         return;
     };
 
@@ -202,7 +216,9 @@ fn test_apple_color_emoji_pipeline_integration() {
 
         // Step 1: extract_raster_glyph on real font
         let glyph = extract_raster_glyph(&font_bytes, 0, gid.0, font_size.round() as u16)
-            .unwrap_or_else(|| panic!("Raster glyph for '{ch}' at size {font_size} should be extracted"));
+            .unwrap_or_else(|| {
+                panic!("Raster glyph for '{ch}' at size {font_size} should be extracted")
+            });
 
         assert_eq!(&glyph.data[..8], &PNG_MAGIC_HEADER);
         assert!(glyph.width > 0.0);
@@ -225,7 +241,10 @@ fn test_apple_color_emoji_pipeline_integration() {
         assert_eq!(image.alpha_type, ImageAlphaType::Alpha);
         assert_eq!(image.width, glyph.width as u32);
         assert_eq!(image.height, glyph.height as u32);
-        assert!(!image.data.is_empty(), "ImageData data buffer must be non-empty");
+        assert!(
+            !image.data.is_empty(),
+            "ImageData data buffer must be non-empty"
+        );
         assert_eq!(
             image.data.len(),
             (image.width * image.height * 4) as usize,
@@ -293,7 +312,9 @@ fn test_apple_color_emoji_pipeline_integration() {
 #[test]
 fn test_apple_color_emoji_coordinate_transform_invariance_across_scale_factors() {
     let Some(font_bytes) = load_apple_color_emoji() else {
-        eprintln!("Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}");
+        eprintln!(
+            "Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}"
+        );
         return;
     };
 
@@ -356,7 +377,9 @@ fn test_apple_color_emoji_coordinate_transform_invariance_across_scale_factors()
 #[test]
 fn test_apple_color_emoji_subpixel_stability_and_monotonicity() {
     let Some(font_bytes) = load_apple_color_emoji() else {
-        eprintln!("Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}");
+        eprintln!(
+            "Skipping Apple Color Emoji contract test: file not found at {APPLE_COLOR_EMOJI_PATH}"
+        );
         return;
     };
 
@@ -371,8 +394,7 @@ fn test_apple_color_emoji_subpixel_stability_and_monotonicity() {
     let font_sizes = [13.333f32, 16.5, 27.8125, 32.0, 48.75, 64.0, 104.25];
 
     for &fs in &font_sizes {
-        let (transform, bounds) =
-            compute_bitmap_placement_transform(glyph_x, glyph_y, fs, &glyph);
+        let (transform, bounds) = compute_bitmap_placement_transform(glyph_x, glyph_y, fs, &glyph);
 
         // Validate finite and non-NaN
         assert!(bounds.x0.is_finite() && !bounds.x0.is_nan());

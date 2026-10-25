@@ -6,20 +6,18 @@
 
 #![cfg(target_os = "macos")]
 
-use std::sync::Arc;
 use anyrender::{PaintRef, PaintScene, RenderContext};
 use blitz_dom::{BaseDocument, DocumentConfig, FontContext, NodeId, node::TextBrush};
 use blitz_html::HtmlDocument;
-use blitz_paint::bitmap_glyph::{
-    compute_bitmap_placement_transform, extract_raster_glyph,
-};
+use blitz_paint::bitmap_glyph::{compute_bitmap_placement_transform, extract_raster_glyph};
 use blitz_paint::paint_scene;
-use blitz_paint::text::{stroke_text, DrawTextContext};
+use blitz_paint::text::{DrawTextContext, stroke_text};
 use kurbo::{Affine, Point, Rect, Shape, Stroke};
+use parley::LayoutContext;
 use parley::fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
 use parley::style::StyleProperty;
-use parley::LayoutContext;
 use peniko::{BlendMode, Color, Fill, FontData, ImageBrushRef, StyleRef};
+use std::sync::Arc;
 
 const APPLE_COLOR_EMOJI_PATH: &str = "/System/Library/Fonts/Apple Color Emoji.ttc";
 const HELVETICA_PATH: &str = "/System/Library/Fonts/Helvetica.ttc";
@@ -69,7 +67,8 @@ impl PaintScene for RecordingScene {
         _filter: Option<Arc<anyrender::Filter>>,
         _backdrop_filter: Option<Arc<anyrender::Filter>>,
     ) {
-        self.events.push(SceneEvent::PushLayer { opacity, transform });
+        self.events
+            .push(SceneEvent::PushLayer { opacity, transform });
     }
     fn push_clip_layer(&mut self, _fill: Fill, transform: Affine, _clip: &impl Shape) {
         self.events.push(SceneEvent::PushClipLayer { transform });
@@ -181,7 +180,11 @@ fn layout_text_with_scale(
     layout
 }
 
-fn layout_text(font_ctx: &mut FontContext, text: &str, font_size: f32) -> parley::Layout<TextBrush> {
+fn layout_text(
+    font_ctx: &mut FontContext,
+    text: &str,
+    font_size: f32,
+) -> parley::Layout<TextBrush> {
     layout_text_with_scale(font_ctx, text, font_size, 1.0)
 }
 
@@ -217,7 +220,11 @@ fn test_task11_ac1_mixed_text_emoji_shared_baseline_coordinate() {
     let font_size = 32.0;
     let layout = layout_text(&mut font_ctx, "Hello 🌍 World", font_size);
 
-    assert_eq!(layout.lines().count(), 1, "Expected single line for 'Hello 🌍 World'");
+    assert_eq!(
+        layout.lines().count(),
+        1,
+        "Expected single line for 'Hello 🌍 World'"
+    );
     let line = layout.lines().next().expect("Line 0 exists");
     let line_baseline = line.metrics().baseline;
 
@@ -262,7 +269,10 @@ fn test_task11_ac1_mixed_text_emoji_shared_baseline_coordinate() {
 
     assert!(has_latin_glyph, "Layout must contain Latin glyphs");
     assert!(has_emoji_glyph, "Layout must contain emoji glyph");
-    assert!(total_glyphs >= 12, "Must contain all characters of 'Hello 🌍 World'");
+    assert!(
+        total_glyphs >= 12,
+        "Must contain all characters of 'Hello 🌍 World'"
+    );
 }
 
 #[test]
@@ -298,12 +308,8 @@ fn test_task11_ac2_emoji_placement_transform_baseline_and_descender() {
         );
 
         let strike_scale = font_size / raster_glyph.strike_ppem as f32;
-        let (placement_transform, bounds) = compute_bitmap_placement_transform(
-            glyph_x,
-            glyph_y,
-            font_size,
-            &raster_glyph,
-        );
+        let (placement_transform, bounds) =
+            compute_bitmap_placement_transform(glyph_x, glyph_y, font_size, &raster_glyph);
 
         // AC-2: Verify computed placement transform places the emoji's baseline precisely on glyph.y
         let local_baseline_y = (raster_glyph.origin_y + raster_glyph.height) as f64;
@@ -319,7 +325,8 @@ fn test_task11_ac2_emoji_placement_transform_baseline_and_descender() {
         );
 
         // AC-2: Descender (-origin_y * strike_scale) extends below glyph.y
-        let expected_descender_bottom = glyph_y as f64 + (-raster_glyph.origin_y * strike_scale) as f64;
+        let expected_descender_bottom =
+            glyph_y as f64 + (-raster_glyph.origin_y * strike_scale) as f64;
         assert!(
             (bounds.y1 - expected_descender_bottom).abs() < 1e-4,
             "Bottom bound ({}) must match glyph_y + (-origin_y * strike_scale) ({})",
@@ -332,7 +339,8 @@ fn test_task11_ac2_emoji_placement_transform_baseline_and_descender() {
         );
 
         // AC-2: Ascent extends above glyph.y
-        let expected_ascent_top = glyph_y as f64 - ((raster_glyph.origin_y + raster_glyph.height) * strike_scale) as f64;
+        let expected_ascent_top =
+            glyph_y as f64 - ((raster_glyph.origin_y + raster_glyph.height) * strike_scale) as f64;
         assert!(
             (bounds.y0 - expected_ascent_top).abs() < 1e-4,
             "Top bound ({}) must match glyph_y - ((origin_y + height) * strike_scale) ({})",
@@ -419,9 +427,12 @@ fn test_task12_complex_zwj_sequences() {
             .events
             .iter()
             .filter_map(|e| match e {
-                SceneEvent::DrawImage { width, height, blob_id, transform } => {
-                    Some((*width, *height, *blob_id, *transform))
-                }
+                SceneEvent::DrawImage {
+                    width,
+                    height,
+                    blob_id,
+                    transform,
+                } => Some((*width, *height, *blob_id, *transform)),
                 _ => None,
             })
             .collect();
@@ -450,10 +461,7 @@ fn test_task12_skin_tone_modifiers() {
     };
 
     let mut emoji_ctx = blitz_dom::build_single_font_ctx(&emoji_bytes);
-    let skin_tone_sequences = [
-        ("thumbs_up_medium", "👍🏽"),
-        ("waving_hand_dark", "👋🏿"),
-    ];
+    let skin_tone_sequences = [("thumbs_up_medium", "👍🏽"), ("waving_hand_dark", "👋🏿")];
 
     for (name, sequence) in skin_tone_sequences {
         let layout = layout_text(&mut emoji_ctx, sequence, 32.0);
@@ -527,7 +535,8 @@ fn test_task12_variation_selector() {
                 for glyph in run.positioned_glyphs() {
                     glyph_count += 1;
                     let raster = extract_raster_glyph(&emoji_bytes, 0, glyph.id as u16, 32);
-                    let raster_glyph = raster.expect("Variation selector sequence must extract raster glyph");
+                    let raster_glyph =
+                        raster.expect("Variation selector sequence must extract raster glyph");
                     assert_eq!(&raster_glyph.data[..8], &PNG_MAGIC_HEADER);
                 }
             }
@@ -597,8 +606,14 @@ fn test_task12_mixed_complex_sequences_in_line() {
         .filter(|e| matches!(e, SceneEvent::DrawImage { .. }))
         .count();
 
-    assert!(vector_count >= 2, "Must contain at least 2 DrawGlyphs runs (for 'Dev: ' and ' Done')");
-    assert_eq!(image_count, 3, "Must contain exactly 3 DrawImage events (for 🧑‍💻, 👍🏽, 🏳️‍🌈)");
+    assert!(
+        vector_count >= 2,
+        "Must contain at least 2 DrawGlyphs runs (for 'Dev: ' and ' Done')"
+    );
+    assert_eq!(
+        image_count, 3,
+        "Must contain exactly 3 DrawImage events (for 🧑‍💻, 👍🏽, 🏳️‍🌈)"
+    );
 }
 
 // =========================================================================
@@ -651,12 +666,8 @@ fn test_task13_ac1_retina_scaling_strike_selection_and_transforms() {
         let glyph_x = 10.0 * scale;
         let glyph_y = 20.0 * scale;
 
-        let (transform, bounds) = compute_bitmap_placement_transform(
-            glyph_x,
-            glyph_y,
-            scaled_font_size,
-            &raster_glyph,
-        );
+        let (transform, bounds) =
+            compute_bitmap_placement_transform(glyph_x, glyph_y, scaled_font_size, &raster_glyph);
 
         // Dimensions match dest_w = width * strike_scale and dest_h = height * strike_scale
         let expected_dest_w = (raster_glyph.width * strike_scale) as f64;
@@ -758,14 +769,22 @@ fn test_task13_ac2_container_clipping_nests_draw_image() {
                 clip_depth -= 1;
                 pop_count += 1;
             }
-            SceneEvent::DrawImage { width, height, blob_id, .. } => {
+            SceneEvent::DrawImage {
+                width,
+                height,
+                blob_id,
+                ..
+            } => {
                 image_clip_depths.push((clip_depth, *width, *height, *blob_id));
             }
             _ => {}
         }
     }
 
-    assert!(push_clip_count >= 1, "Must have pushed at least 1 clip layer");
+    assert!(
+        push_clip_count >= 1,
+        "Must have pushed at least 1 clip layer"
+    );
     assert!(pop_count >= 1, "Must have popped at least 1 layer");
     assert_eq!(
         image_clip_depths.len(),

@@ -600,12 +600,9 @@ mod tests {
             create_styled_div(&mut doc, "position: relative; width: 400px; height: 400px;");
         let static_normal =
             create_styled_div(&mut doc, "position: static; width: 50px; height: 50px;");
-        let opacity_child =
-            create_styled_div(&mut doc, "opacity: 0.5; width: 50px; height: 50px;");
-        let scale_child =
-            create_styled_div(&mut doc, "scale: 2; width: 50px; height: 50px;");
-        let rotate_child =
-            create_styled_div(&mut doc, "rotate: 45deg; width: 50px; height: 50px;");
+        let opacity_child = create_styled_div(&mut doc, "opacity: 0.5; width: 50px; height: 50px;");
+        let scale_child = create_styled_div(&mut doc, "scale: 2; width: 50px; height: 50px;");
+        let rotate_child = create_styled_div(&mut doc, "rotate: 45deg; width: 50px; height: 50px;");
         let translate_child =
             create_styled_div(&mut doc, "translate: 10px 20px; width: 50px; height: 50px;");
 
@@ -631,14 +628,8 @@ mod tests {
             node_to_paint_order(&doc.nodes[opacity_child], false),
             (2, 0)
         );
-        assert_eq!(
-            node_to_paint_order(&doc.nodes[scale_child], false),
-            (2, 0)
-        );
-        assert_eq!(
-            node_to_paint_order(&doc.nodes[rotate_child], false),
-            (2, 0)
-        );
+        assert_eq!(node_to_paint_order(&doc.nodes[scale_child], false), (2, 0));
+        assert_eq!(node_to_paint_order(&doc.nodes[rotate_child], false), (2, 0));
         assert_eq!(
             node_to_paint_order(&doc.nodes[translate_child], false),
             (2, 0)
@@ -692,7 +683,12 @@ mod tests {
             let mut mutator = doc.mutate();
             mutator.append_children(
                 flex_container,
-                &[item_order_3, item_order_1, item_static_order_5, item_order_2],
+                &[
+                    item_order_3,
+                    item_order_1,
+                    item_static_order_5,
+                    item_order_2,
+                ],
             );
             mutator.append_children(body, &[flex_container]);
         }
@@ -714,7 +710,12 @@ mod tests {
         // Level 0 (static, order 5) paints first, then Level 2 sorted by order (1, 2, 3)
         assert_eq!(
             &list[..],
-            &[item_static_order_5, item_order_1, item_order_2, item_order_3]
+            &[
+                item_static_order_5,
+                item_order_1,
+                item_order_2,
+                item_order_3
+            ]
         );
     }
 
@@ -722,8 +723,10 @@ mod tests {
     fn static_element_raw_z_index_does_not_hoist() {
         // f. Static element with specified raw z-index (e.g. `z-index: 10`) does NOT hoist and remains effective z-index 0.
         let (mut doc, body) = make_test_doc();
-        let container =
-            create_styled_div(&mut doc, "position: relative; z-index: 0; width: 400px; height: 400px;");
+        let container = create_styled_div(
+            &mut doc,
+            "position: relative; z-index: 0; width: 400px; height: 400px;",
+        );
         let static_z10 = create_styled_div(
             &mut doc,
             "position: static; z-index: 10; width: 50px; height: 50px;",
@@ -774,12 +777,16 @@ mod tests {
     fn positioned_element_with_valid_z_index_hoists() {
         // g. Positioned element with valid non-zero z-index hoists to enclosing stacking context.
         let (mut doc, body) = make_test_doc();
-        let container =
-            create_styled_div(&mut doc, "position: relative; z-index: 0; width: 400px; height: 400px;");
+        let container = create_styled_div(
+            &mut doc,
+            "position: relative; z-index: 0; width: 400px; height: 400px;",
+        );
         let non_sc_wrapper =
             create_styled_div(&mut doc, "position: static; width: 200px; height: 200px;");
-        let hoisted_child =
-            create_styled_div(&mut doc, "position: relative; z-index: 8; width: 50px; height: 50px;");
+        let hoisted_child = create_styled_div(
+            &mut doc,
+            "position: relative; z-index: 8; width: 50px; height: 50px;",
+        );
 
         {
             let mut mutator = doc.mutate();
@@ -798,6 +805,10 @@ mod tests {
             .stacking_context
             .as_ref()
             .expect("container has stacking context");
-        assert!(sc.children.iter().any(|c| c.node_id == hoisted_child && c.z_index == 8));
+        assert!(
+            sc.children
+                .iter()
+                .any(|c| c.node_id == hoisted_child && c.z_index == 8)
+        );
     }
 }

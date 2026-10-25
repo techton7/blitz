@@ -3682,10 +3682,9 @@ mod animation_tests {
             viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
             ..Default::default()
         });
-        let sheet = UserAgentStylesheet::parse(
+        doc.add_user_agent_stylesheet(
             "@keyframes instant-fade { from { opacity: 0; } to { opacity: 1; } }",
         );
-        doc.add_user_agent_stylesheet(sheet);
         let root_id = doc.root_node().id;
         let style = |value: &str| Attribute {
             name: qual_name!("style"),
@@ -3722,10 +3721,9 @@ mod animation_tests {
             viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
             ..Default::default()
         });
-        let sheet = UserAgentStylesheet::parse(
+        doc.add_user_agent_stylesheet(
             "@keyframes pulse { from { opacity: 0; } to { opacity: 1; } }",
         );
-        doc.add_user_agent_stylesheet(sheet);
         let root_id = doc.root_node().id;
         let style = |value: &str| Attribute {
             name: qual_name!("style"),
@@ -3775,10 +3773,9 @@ mod animation_tests {
             viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
             ..Default::default()
         });
-        let sheet = UserAgentStylesheet::parse(
+        doc.add_user_agent_stylesheet(
             "@keyframes inf-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }",
         );
-        doc.add_user_agent_stylesheet(sheet);
         let root_id = doc.root_node().id;
         let style = |value: &str| Attribute {
             name: qual_name!("style"),

@@ -16,11 +16,10 @@ mod write_once_attr;
 pub use blitz_dom::DocumentConfig;
 pub use dioxus_document::DioxusDocument;
 pub use events::{
-    NodeHandle, NativeFocusData, NativeFormData, MouseEventButton, dispatch_synthetic_click,
+    MouseEventButton, NativeFocusData, NativeFormData, NodeHandle, dispatch_synthetic_click,
     dispatch_synthetic_focus, dispatch_synthetic_input, dispatch_synthetic_key,
-    dispatch_synthetic_pointer_move, dispatch_synthetic_pointer_down,
-    dispatch_synthetic_pointer_up, dispatch_synthetic_wheel,
-    parse_key_str, synthetic_click_event,
+    dispatch_synthetic_pointer_down, dispatch_synthetic_pointer_move,
+    dispatch_synthetic_pointer_up, dispatch_synthetic_wheel, parse_key_str, synthetic_click_event,
 };
 pub use write_once_attr::{CustomWidgetAttr, SubDocumentAttr};
 
@@ -86,7 +85,10 @@ mod tests {
     #[test]
     fn attribute_namespace_preserves_explicit_namespace() {
         let attr_name = qual_name_attr("href", Some("http://www.w3.org/1999/xlink"));
-        assert_eq!(attr_name.ns, Namespace::from("http://www.w3.org/1999/xlink"));
+        assert_eq!(
+            attr_name.ns,
+            Namespace::from("http://www.w3.org/1999/xlink")
+        );
         assert_eq!(&*attr_name.local, "href");
     }
 }

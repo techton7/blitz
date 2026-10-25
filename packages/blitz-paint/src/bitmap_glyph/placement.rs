@@ -40,7 +40,13 @@ mod tests {
     use super::*;
     use kurbo::Point;
 
-    fn sample_glyph(origin_x: f32, origin_y: f32, width: f32, height: f32, strike_ppem: u16) -> NormalizedRasterGlyph {
+    fn sample_glyph(
+        origin_x: f32,
+        origin_y: f32,
+        width: f32,
+        height: f32,
+        strike_ppem: u16,
+    ) -> NormalizedRasterGlyph {
         NormalizedRasterGlyph {
             data: Vec::new(),
             origin_x,
@@ -59,7 +65,8 @@ mod tests {
         let glyph_y = 200.0;
         let font_size = 32.0;
 
-        let (transform, bounds) = compute_bitmap_placement_transform(glyph_x, glyph_y, font_size, &glyph);
+        let (transform, bounds) =
+            compute_bitmap_placement_transform(glyph_x, glyph_y, font_size, &glyph);
 
         // dest_x = 100 + 0 * 1 = 100
         // dest_y = 200 - (0 + 32) * 1 = 168
@@ -85,7 +92,8 @@ mod tests {
         let glyph_y = 150.0;
         let font_size = 64.0; // strike_scale = 2.0
 
-        let (transform, bounds) = compute_bitmap_placement_transform(glyph_x, glyph_y, font_size, &glyph);
+        let (transform, bounds) =
+            compute_bitmap_placement_transform(glyph_x, glyph_y, font_size, &glyph);
 
         // strike_scale = 2.0
         // dest_x = 50 + 2 * 2 = 54.0
@@ -113,7 +121,8 @@ mod tests {
         let glyph_y = 20.0;
         let font_size = 60.0; // strike_scale = 3.0
 
-        let (transform, bounds) = compute_bitmap_placement_transform(glyph_x, glyph_y, font_size, &glyph);
+        let (transform, bounds) =
+            compute_bitmap_placement_transform(glyph_x, glyph_y, font_size, &glyph);
 
         // strike_scale = 3.0
         // dest_x = 10 + (-1) * 3 = 7.0
@@ -141,7 +150,8 @@ mod tests {
         let glyph_y = 100.0;
         let font_size = 24.0; // strike_scale = 0.75
 
-        let (transform, bounds) = compute_bitmap_placement_transform(glyph_x, glyph_y, font_size, &glyph);
+        let (transform, bounds) =
+            compute_bitmap_placement_transform(glyph_x, glyph_y, font_size, &glyph);
 
         // dest_x = 0
         // dest_y = 100 - 32 * 0.75 = 76.0
@@ -281,10 +291,19 @@ mod tests {
     fn test_subpixel_position_stability_arbitrary_coordinates() {
         // Arbitrary floating-point font sizes and baseline coordinates
         let font_sizes = [
-            0.01f32, 0.5, 7.25, 12.0, 13.333, 16.0, 16.5, 21.875, 27.8125, 32.0,
-            48.125, 64.0, 72.3333, 100.0, 104.25, 128.5, 256.0, 1024.0,
+            0.01f32, 0.5, 7.25, 12.0, 13.333, 16.0, 16.5, 21.875, 27.8125, 32.0, 48.125, 64.0,
+            72.3333, 100.0, 104.25, 128.5, 256.0, 1024.0,
         ];
-        let baseline_xs = [-150.333f32, -0.75, 0.0, 0.125, 10.333, 42.1875, 104.25, 512.667];
+        let baseline_xs = [
+            -150.333f32,
+            -0.75,
+            0.0,
+            0.125,
+            10.333,
+            42.1875,
+            104.25,
+            512.667,
+        ];
         let baseline_ys = [-50.125f32, 0.0, 0.333, 15.5, 104.25, 200.75, 999.999];
 
         let glyph = sample_glyph(2.5, -4.0, 32.0, 32.0, 32);
@@ -292,7 +311,8 @@ mod tests {
         for &fs in &font_sizes {
             for &bx in &baseline_xs {
                 for &by in &baseline_ys {
-                    let (transform, bounds) = compute_bitmap_placement_transform(bx, by, fs, &glyph);
+                    let (transform, bounds) =
+                        compute_bitmap_placement_transform(bx, by, fs, &glyph);
 
                     // 1. Bounds coordinates and dimensions must be finite and non-NaN
                     assert!(bounds.x0.is_finite() && !bounds.x0.is_nan());
@@ -331,8 +351,8 @@ mod tests {
         let glyph_y = 200.75f32;
 
         let font_sizes = [
-            0.1f32, 0.5, 1.0, 5.5, 10.0, 13.333, 16.0, 16.5, 20.0, 24.0,
-            27.8125, 32.0, 48.0, 64.0, 96.0, 104.25, 128.0, 256.0,
+            0.1f32, 0.5, 1.0, 5.5, 10.0, 13.333, 16.0, 16.5, 20.0, 24.0, 27.8125, 32.0, 48.0, 64.0,
+            96.0, 104.25, 128.0, 256.0,
         ];
 
         for window in font_sizes.windows(2) {
