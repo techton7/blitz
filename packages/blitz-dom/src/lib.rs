@@ -77,6 +77,10 @@ pub use resolved_style::{
 };
 pub use stylo_to_kurbo::resolve_2d_transform;
 
+/// Extension marker trait for backwards compatibility with downstream callers.
+pub trait CopyStyleGetters {}
+impl CopyStyleGetters for style::properties::ComputedValues {}
+
 pub mod net;
 pub mod util;
 
