@@ -2651,6 +2651,7 @@ dependencies = [
  "keyboard-types 0.7.0",
  "manganis",
  "peniko",
+ "percent-encoding",
  "rustc-hash 2.1.3",
  "slotmap",
  "tokio",
