@@ -97,7 +97,7 @@ pub use blitz_traits::node_id::NodeId;
 // `Node::final_layout`)
 pub use config::{DocumentConfig, StyleThreading};
 pub use document::{
-    BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, PlainDocument,
+    BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, EventCaptureHook, PlainDocument,
     QueuedAnimationEvent,
 };
 pub use markup5ever::{

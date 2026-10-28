@@ -202,6 +202,8 @@ pub struct QueuedAnimationEvent {
     pub event: blitz_traits::events::DomEventData,
 }
 
+pub type EventCaptureHook = Rc<dyn Fn(&BaseDocument, &DomEvent, &[NodeId])>;
+
 pub struct BaseDocument {
     /// ID of the document
     id: usize,
@@ -233,6 +235,7 @@ pub struct BaseDocument {
     pub(crate) tx: Sender<DocumentEvent>,
     // rx will always be Some, except temporarily while processing events
     pub(crate) rx: Option<Receiver<DocumentEvent>>,
+    pub(crate) capture_hook: Option<EventCaptureHook>,
 
     /// A slotmap-backed tree of nodes
     ///
@@ -454,6 +457,7 @@ impl BaseDocument {
             id,
             tx,
             rx: Some(rx),
+            capture_hook: None,
 
             guard,
             nodes,
@@ -578,6 +582,14 @@ impl BaseDocument {
     /// The base url used for resolving linked resources (stylesheets, images, fonts, etc)
     pub fn base_url(&self) -> &Url {
         &self.url
+    }
+
+    pub fn set_capture_hook(&mut self, hook: Option<EventCaptureHook>) {
+        self.capture_hook = hook;
+    }
+
+    pub fn capture_hook(&self) -> Option<&EventCaptureHook> {
+        self.capture_hook.as_ref()
     }
 
     pub fn guard(&self) -> &SharedRwLock {
@@ -3397,7 +3409,8 @@ mod animation_tests {
     use crate::{Attribute, qual_name};
     use blitz_traits::SmolStr;
     use blitz_traits::events::{
-        BlitzAnimationEvent, BlitzTransitionEvent, DomEventData, EventState,
+        BlitzAnimationEvent, BlitzPointerEvent, BlitzPointerId, BlitzTransitionEvent,
+        DomEventData, EventState, PointerCoords,
     };
     use blitz_traits::shell::ColorScheme;
 
@@ -3811,5 +3824,87 @@ mod animation_tests {
             assert_eq!(cancel.animation_name, "inf-spin");
             assert!((cancel.elapsed_time - 0.5).abs() < 1e-4);
         }
+    }
+
+    #[test]
+    fn test_event_capture_hook() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let root_id = doc.root_node().id;
+        let (child_id, grandchild_id) = {
+            let mut mutator = doc.mutate();
+            let child = mutator.create_element(qual_name!("div"), vec![]);
+            mutator.append_children(root_id, &[child]);
+            let grandchild = mutator.create_element(qual_name!("button"), vec![]);
+            mutator.append_children(child, &[grandchild]);
+            (child, grandchild)
+        };
+
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let captured_clone = captured.clone();
+        doc.set_capture_hook(Some(Rc::new(move |_doc, event, chain| {
+            captured_clone
+                .borrow_mut()
+                .push((event.clone(), chain.to_vec()));
+        })));
+
+        assert!(doc.capture_hook().is_some());
+
+        let collector = EventCollector::default();
+        let mut driver = EventDriver::new(&mut doc, collector.clone());
+
+        // 1. Verify AnimationStart event dispatch triggers hook
+        let anim_data = BlitzAnimationEvent {
+            animation_name: "test".to_string(),
+            elapsed_time: 0.0,
+            pseudo_element: SmolStr::default(),
+        };
+        let event = DomEvent::new(child_id, DomEventData::AnimationStart(anim_data));
+        driver.handle_dom_event(event);
+
+        {
+            let cap = captured.borrow();
+            assert_eq!(cap.len(), 1, "Capture hook should be called exactly once for animation");
+            assert_eq!(cap[0].0.target, child_id);
+            assert_eq!(cap[0].1, vec![child_id]);
+        }
+
+        // 2. Verify PointerDown event triggers hook and receives full node chain
+        let ptr_data = BlitzPointerEvent {
+            id: BlitzPointerId::Mouse,
+            is_primary: true,
+            coords: PointerCoords {
+                page_x: 10.0,
+                page_y: 10.0,
+                screen_x: 10.0,
+                screen_y: 10.0,
+                client_x: 10.0,
+                client_y: 10.0,
+            },
+            mods: Default::default(),
+            button: Default::default(),
+            buttons: Default::default(),
+            details: Default::default(),
+            element: Default::default(),
+            active_pointers: Default::default(),
+        };
+        let ptr_event = DomEvent::new(grandchild_id, DomEventData::PointerDown(ptr_data));
+        driver.handle_dom_event(ptr_event);
+
+        {
+            let cap = captured.borrow();
+            assert_eq!(cap.len(), 2, "Capture hook should be called for PointerDown");
+            assert_eq!(cap[1].0.target, grandchild_id);
+            assert_eq!(cap[1].1, vec![grandchild_id, child_id]);
+        }
+
+        let handled = collector.events.borrow();
+        assert_eq!(handled.len(), 2, "Handler should receive both events");
+        assert_eq!(handled[0].target, child_id);
+        assert_eq!(handled[1].target, grandchild_id);
+
+        // Test clearing hook
+        drop(driver);
+        doc.set_capture_hook(None);
+        assert!(doc.capture_hook().is_none());
     }
 }
