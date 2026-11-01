@@ -451,7 +451,7 @@ mod tests {
         }
 
         fn app() -> Element {
-            let state: Rc<State> = dioxus_core::use_hook(|| dioxus_core::consume_context());
+            let state: Rc<State> = dioxus_core::use_hook(dioxus_core::consume_context);
             rsx! {
                 div {
                     "data-state": "open",
