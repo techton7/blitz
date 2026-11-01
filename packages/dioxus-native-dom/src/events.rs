@@ -59,8 +59,8 @@ impl HtmlEventConverter for NativeConverter {
     fn convert_keyboard_data(&self, event: &PlatformEventData) -> KeyboardData {
         event
             .downcast::<BlitzKeyboardData>()
-            .unwrap()
-            .clone()
+            .cloned()
+            .unwrap_or_default()
             .into()
     }
 
@@ -347,6 +347,21 @@ impl HasFileData for NativeFormData {
 
 #[derive(Clone, Debug)]
 pub(crate) struct BlitzKeyboardData(pub(crate) BlitzKeyEvent);
+
+impl Default for BlitzKeyboardData {
+    fn default() -> Self {
+        Self(BlitzKeyEvent {
+            key: keyboard_types::Key::Unidentified,
+            code: keyboard_types::Code::Unidentified,
+            modifiers: keyboard_types::Modifiers::empty(),
+            location: keyboard_types::Location::Standard,
+            is_auto_repeating: false,
+            is_composing: false,
+            state: blitz_traits::events::KeyState::Pressed,
+            text: None,
+        })
+    }
+}
 
 impl ModifiersInteraction for BlitzKeyboardData {
     fn modifiers(&self) -> Modifiers {
@@ -723,6 +738,10 @@ pub fn synthetic_form_event(
         value: value.into(),
         values: values.into(),
     })
+}
+
+pub fn synthetic_keyboard_event(event: blitz_traits::events::BlitzKeyEvent) -> Box<dyn Any> {
+    Box::new(BlitzKeyboardData(event))
 }
 
 #[cfg(test)]
