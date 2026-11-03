@@ -95,6 +95,7 @@ pub use crate::node::Widget;
 pub use blitz_traits::node_id::NodeId;
 // Re-export taffy: it is part of blitz-dom's public API (e.g. `Node::style`,
 // `Node::final_layout`)
+pub use taffy;
 pub use config::{DocumentConfig, StyleThreading};
 pub use document::{
     BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, EventCaptureHook, PlainDocument,

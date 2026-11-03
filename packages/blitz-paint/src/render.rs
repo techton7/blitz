@@ -1052,10 +1052,18 @@ impl ElementCx<'_, '_> {
         if let Some(hoisted) = &self.node.stacking_context {
             for hoisted_child in hoisted.neg_z_hoisted_children() {
                 let position = hoisted_child.position(self.node.tree(), self.node.id);
-                let pos = kurbo::Vec2 {
+                let mut pos = kurbo::Vec2 {
                     x: position.x as f64 * self.scale,
                     y: position.y as f64 * self.scale,
                 };
+                let child = &self.context.dom.as_ref().tree()[hoisted_child.node_id];
+                if child.taffy_position() == taffy::Position::Fixed
+                    && Some(self.node.id) == self.context.root_element_id
+                {
+                    let scroll = self.context.dom.as_ref().viewport_scroll();
+                    pos.x += scroll.x * self.scale;
+                    pos.y += scroll.y * self.scale;
+                }
                 self.render_node(
                     scene,
                     hoisted_child.node_id,
@@ -1092,10 +1100,18 @@ impl ElementCx<'_, '_> {
         if let Some(hoisted) = &self.node.stacking_context {
             for hoisted_child in hoisted.pos_z_hoisted_children() {
                 let position = hoisted_child.position(self.node.tree(), self.node.id);
-                let pos = kurbo::Vec2 {
+                let mut pos = kurbo::Vec2 {
                     x: position.x as f64 * self.scale,
                     y: position.y as f64 * self.scale,
                 };
+                let child = &self.context.dom.as_ref().tree()[hoisted_child.node_id];
+                if child.taffy_position() == taffy::Position::Fixed
+                    && Some(self.node.id) == self.context.root_element_id
+                {
+                    let scroll = self.context.dom.as_ref().viewport_scroll();
+                    pos.x += scroll.x * self.scale;
+                    pos.y += scroll.y * self.scale;
+                }
                 self.render_node(
                     scene,
                     hoisted_child.node_id,
