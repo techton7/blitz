@@ -3,11 +3,13 @@
 /// Private module of type aliases so we can refer to stylo types with nicer names
 pub(crate) mod stylo {
     pub(crate) use style::Atom;
+    pub(crate) use style::logical_geometry::WritingMode;
     pub(crate) use style::properties::ComputedValues;
     pub(crate) use style::properties::generated::longhands::box_sizing::computed_value::T as BoxSizing;
     pub(crate) use style::properties::generated::longhands::direction::computed_value::T as Direction;
     pub(crate) use style::properties::longhands::aspect_ratio::computed_value::T as AspectRatio;
     pub(crate) use style::properties::longhands::position::computed_value::T as Position;
+    pub(crate) use style::values::computed::CSSPixelLength;
     pub(crate) use style::values::computed::length_percentage::CalcLengthPercentage;
     pub(crate) use style::values::computed::length_percentage::Unpacked as UnpackedLengthPercentage;
     pub(crate) use style::values::computed::{
@@ -61,6 +63,7 @@ pub(crate) mod stylo {
     };
 }
 
+use crate::CopyStyleGetters;
 use stylo::Atom;
 use taffy::CompactLength;
 use taffy::style_helpers::*;
@@ -277,6 +280,13 @@ pub fn box_sizing(input: stylo::BoxSizing) -> taffy::BoxSizing {
 /// Convert the inset properties to a Taffy `Rect`. Insets have no effect on
 /// `position: static` boxes, so they are reported as `auto` in that case.
 #[inline]
+/// Resolve a `calc()` length-percentage (as stored in a [`taffy::LengthPercentage`] created by
+/// [`length_percentage`]) against `parent_size`
+pub fn resolve_calc_value(calc_ptr: *const (), parent_size: f32) -> f32 {
+    let calc = unsafe { &*(calc_ptr as *const stylo::CalcLengthPercentage) };
+    calc.resolve(stylo::CSSPixelLength::new(parent_size)).px()
+}
+
 pub fn inset_rect(style: &stylo::ComputedValues) -> taffy::Rect<taffy::LengthPercentageAuto> {
     if style.get_box().position == stylo::Position::Static {
         return taffy::Rect::auto();
@@ -370,6 +380,29 @@ pub fn containing_block_claims(style: &stylo::ComputedValues) -> taffy::Containi
     }
 }
 
+/// [`containing_block_claims`] for a non-atomic inline box, to which transforms and containment
+/// do not apply.
+pub fn inline_containing_block_claims(
+    style: &stylo::ComputedValues,
+) -> taffy::ContainingBlockClaims {
+    use style::values::specified::box_::WillChangeBits;
+
+    let box_style = style.get_box();
+    let effects = style.get_effects();
+    let fixed = !effects.filter.0.is_empty()
+        || !effects.backdrop_filter.0.is_empty()
+        || box_style
+            .will_change
+            .bits
+            .intersects(WillChangeBits::FIXPOS_CB_NON_SVG);
+    taffy::ContainingBlockClaims {
+        absolute: box_style.position != stylo::Position::Static
+            || fixed
+            || establishes_absolute_containing_block(style),
+        fixed,
+    }
+}
+
 #[inline]
 pub fn overflow(input: stylo::Overflow) -> taffy::Overflow {
     match input {
@@ -412,8 +445,10 @@ pub fn direction(input: stylo::Direction) -> taffy::Direction {
 #[inline]
 pub fn aspect_ratio(input: stylo::AspectRatio) -> Option<f32> {
     match input.ratio {
-        stylo::PreferredRatio::None => None,
-        stylo::PreferredRatio::Ratio(val) => Some(val.0.0 / val.1.0),
+        // A degenerate ratio (either side zero) behaves as `auto`:
+        // <https://drafts.csswg.org/css-sizing-4/#aspect-ratio>
+        stylo::PreferredRatio::Ratio(val) if !val.is_degenerate() => Some(val.0.0 / val.1.0),
+        _ => None,
     }
 }
 
@@ -473,8 +508,8 @@ pub fn content_alignment(
 pub fn table_cell_vertical_align(style: &stylo::ComputedValues) -> Option<taffy::AlignContent> {
     let box_styles = style.get_box();
     let mut align = match (
-        box_styles.clone_alignment_baseline(),
-        box_styles.clone_baseline_shift(),
+        box_styles.slow_clone_alignment_baseline(),
+        box_styles.get_baseline_shift(),
     ) {
         (_, stylo::BaselineShift::Keyword(stylo::BaselineShiftKeyword::Top)) => {
             taffy::AlignContent::START
@@ -504,20 +539,25 @@ pub fn justify_content(
         stylo::FlexDirection::Row | stylo::FlexDirection::RowReverse
     );
     let is_rtl = matches!(direction, stylo::Direction::Rtl);
+    justify_content_in(input, is_row.then_some(is_rtl), display)
+}
+
+/// Convert `justify-content`. `left_is_end` is how the physical `left` keyword resolves when the
+/// main axis is parallel to the left/right axis; `None` makes `left`/`right` behave as `start`.
+#[inline]
+pub fn justify_content_in(
+    input: stylo::ContentDistribution,
+    left_is_end: Option<bool>,
+    display: stylo::Display,
+) -> taffy::AlignContent {
     let primary = input.primary();
-    let physical = match primary.value() {
-        stylo::AlignFlags::LEFT => Some(false),
-        stylo::AlignFlags::RIGHT => Some(true),
+    let is_right = match primary.value() {
+        stylo::AlignFlags::LEFT => false,
+        stylo::AlignFlags::RIGHT => true,
         _ => return self::content_alignment(input, display),
     };
-    let mut align = match physical {
-        Some(is_right) if is_row => {
-            if is_right != is_rtl {
-                taffy::AlignContent::END
-            } else {
-                taffy::AlignContent::START
-            }
-        }
+    let mut align = match left_is_end {
+        Some(left_is_end) if is_right != left_is_end => taffy::AlignContent::END,
         _ => taffy::AlignContent::START,
     };
     if primary.flags().contains(stylo::AlignFlags::SAFE) {
@@ -769,9 +809,8 @@ pub fn grid_template_tracks(
             })
             .collect(),
 
-        // TODO: Implement subgrid and masonry
+        // TODO: Implement subgrid
         stylo::GenericGridTemplateComponent::Subgrid(_) => Vec::new(),
-        stylo::GenericGridTemplateComponent::Masonry => Vec::new(),
     }
 }
 
@@ -786,9 +825,8 @@ pub fn grid_template_line_names(
             Some(crate::wrapper::StyloLineNameIter::new(&list.line_names))
         }
 
-        // TODO: Implement subgrid and masonry
+        // TODO: Implement subgrid
         stylo::GenericGridTemplateComponent::Subgrid(_) => None,
-        stylo::GenericGridTemplateComponent::Masonry => None,
     }
 }
 
@@ -905,6 +943,18 @@ pub fn max_track(
 }
 
 /// Eagerly convert an entire [`stylo::ComputedValues`] into a [`taffy::Style`]
+/// Convert a stylo style into a concrete [`taffy::Style`] expressed in the axes of `layout_wm`, the
+/// writing mode of the algorithm laying the box out (see [`crate::writing_mode`]).
+pub fn to_taffy_style_in(
+    style: &stylo::ComputedValues,
+    layout_wm: stylo::WritingMode,
+) -> taffy::Style<Atom> {
+    use crate::writing_mode::WritingModeExt;
+    let mut taffy_style = to_taffy_style(style);
+    layout_wm.transpose_style(&mut taffy_style);
+    taffy_style
+}
+
 pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style<Atom> {
     let display = style.clone_display();
     let pos = style.get_position();

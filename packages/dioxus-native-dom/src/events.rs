@@ -7,14 +7,13 @@ use blitz_traits::events::{
     BlitzTransitionEvent, BlitzWheelDelta, BlitzWheelEvent, MouseEventButton,
 };
 use dioxus_html::{
-    AnimationData, CancelData, ClipboardData, CompositionData, DragData, FocusData, FormData,
-    FormValue, HasAnimationData, HasFileData, HasFocusData, HasFormData, HasKeyboardData,
-    HasMouseData, HasPointerData, HasScrollData, HasTouchData, HasTouchPointData,
-    HasTransitionData, HasWheelData, HtmlEventConverter, ImageData, KeyboardData, MediaData,
-    MountedData, MountedError, MountedResult, MouseData, PlatformEventData, PointerData,
-    RenderedElementBacking, ResizeData, ScrollBehavior, ScrollData, ScrollLogicalPosition,
-    ScrollToOptions, SelectionData, ToggleData, TouchData, TouchPoint, TransitionData, VisibleData,
-    WheelData,
+    AnimationData, BeforeInputData, CancelData, ClipboardData, CompositionData, DragData, FocusData,
+    FormData, FormValue, HasAnimationData, HasFileData, HasFocusData, HasFormData, HasKeyboardData,
+    HasMouseData, HasPointerData, HasScrollData, HasTouchData, HasTouchPointData, HasTransitionData,
+    HasWheelData, HtmlEventConverter, ImageData, KeyboardData, MediaData, MountedData, MountedError,
+    MountedResult, MouseData, PlatformEventData, PointerData, RenderedElementBacking, ResizeData,
+    ScrollBehavior, ScrollData, ScrollLogicalPosition, ScrollToOptions, SelectionData, ToggleData,
+    TouchData, TouchPoint, TransitionData, VisibleData, WheelData,
     geometry::{
         ClientPoint, ElementPoint, PagePoint, PixelsRect, PixelsSize, PixelsVector2D, ScreenPoint,
         WheelDelta,
@@ -74,6 +73,12 @@ impl HtmlEventConverter for NativeConverter {
             .unwrap()
             .clone()
             .into()
+    }
+
+    fn convert_before_input_data(&self, _event: &PlatformEventData) -> BeforeInputData {
+        unimplemented!(
+            "todo: convert_before_input_data in dioxus-native. requires support in blitz"
+        )
     }
 
     fn convert_clipboard_data(&self, _event: &PlatformEventData) -> ClipboardData {
@@ -206,12 +211,22 @@ impl RenderedElementBacking for NodeHandle {
     }
 
     fn get_scroll_offset(&self) -> Pin<Box<dyn Future<Output = MountedResult<PixelsVector2D>>>> {
-        let scroll_offset = *self.node().scroll_offset();
+        let Some(scroll_offset) = self
+            .doc()
+            .get_node(self.node_id)
+            .map(|node| *node.scroll_offset())
+        else {
+            return self.node_not_exist_err();
+        };
         Box::pin(async move { Ok(PixelsVector2D::new(scroll_offset.x, scroll_offset.y)) })
     }
 
     fn get_scroll_size(&self) -> Pin<Box<dyn Future<Output = MountedResult<PixelsSize>>>> {
-        let node = self.node();
+        let doc = self.doc();
+        let Some(node) = doc.get_node(self.node_id) else {
+            drop(doc);
+            return self.node_not_exist_err();
+        };
         let scroll_width = node.final_layout().scroll_width() as f64;
         let scroll_height = node.final_layout().scroll_height() as f64;
         Box::pin(async move { Ok(PixelsSize::new(scroll_width, scroll_height)) })
@@ -351,7 +366,7 @@ pub(crate) struct BlitzKeyboardData(pub(crate) BlitzKeyEvent);
 impl Default for BlitzKeyboardData {
     fn default() -> Self {
         Self(BlitzKeyEvent {
-            key: keyboard_types::Key::Unidentified,
+            key: keyboard_types::Key::Named(keyboard_types::NamedKey::Unidentified),
             code: keyboard_types::Code::Unidentified,
             modifiers: keyboard_types::Modifiers::empty(),
             location: keyboard_types::Location::Standard,
@@ -743,7 +758,6 @@ pub fn synthetic_form_event(
 pub fn synthetic_keyboard_event(event: blitz_traits::events::BlitzKeyEvent) -> Box<dyn Any> {
     Box::new(BlitzKeyboardData(event))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -25,7 +25,9 @@ pub trait ShellProvider: Send + Sync + 'static {
         let _ = width;
         let _ = height;
     }
-    fn get_clipboard_text(&self) -> Result<String, ClipboardError> {
+    /// Request clipboard text, delivered asynchronously to the document as a `UiEvent`.
+    /// The text is applied to whichever text input is focused when it arrives.
+    fn request_clipboard_text(&self) -> Result<(), ClipboardError> {
         Err(ClipboardError)
     }
     fn set_clipboard_text(&self, text: String) -> Result<(), ClipboardError> {
@@ -60,6 +62,11 @@ pub trait ShellProvider: Send + Sync + 'static {
     /// Begin an interactive user-driven move of the window (call from a
     /// mousedown handler on a drag region)
     fn drag_window(&self) {}
+
+    /// Open developer tools inspecting the document with the given id
+    fn open_devtools(&self, doc_id: usize) {
+        let _ = doc_id;
+    }
 }
 
 pub struct DummyShellProvider;

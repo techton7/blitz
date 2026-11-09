@@ -190,7 +190,8 @@ impl<Rend: WindowRenderer> View<Rend> {
         let viewport = Viewport::new(viewport_width, viewport_height, scale, color_scheme);
 
         // Create shell provider
-        let shell_provider = BlitzShellProvider::new(winit_window.clone(), proxy.clone());
+        let shell_provider =
+            BlitzShellProvider::new(winit_window.clone(), proxy.clone(), config.doc.id());
 
         let mut doc = config.doc;
         let mut inner = doc.inner_mut();
@@ -373,14 +374,6 @@ impl<Rend: WindowRenderer> View<Rend> {
         if let Some(waker) = &self.waker {
             let cx = std::task::Context::from_waker(waker);
             if self.doc.poll(Some(cx)) {
-                #[cfg(feature = "accessibility")]
-                {
-                    let inner = self.doc.inner();
-                    if inner.has_changes() {
-                        self.accessibility.update_tree(&inner);
-                    }
-                }
-
                 self.request_redraw();
                 return true;
             }
@@ -427,6 +420,14 @@ impl<Rend: WindowRenderer> View<Rend> {
             height,
             is_blocked || !is_visible
         );
+
+        // Push the accessibility tree after resolve so that it reflects the current
+        // DOM, styles, layout and focus.
+        if !is_blocked && inner.has_changes() {
+            #[cfg(feature = "accessibility")]
+            self.accessibility.update_tree(&inner);
+            inner.clear_changes();
+        }
 
         if !is_blocked && is_visible {
             blitz_traits::probe!("blitz-shell::redraw", "calling self.renderer.render");
@@ -704,7 +705,7 @@ impl<Rend: WindowRenderer> View<Rend> {
                                     drop(inner);
                                     self.request_redraw();
                                 }
-                                KeyCode::KeyT => self.doc.inner().print_taffy_tree(),
+                                KeyCode::KeyT => self.doc.inner_mut().print_taffy_tree(),
                                 _ => {}
                             };
                         }
@@ -753,8 +754,24 @@ impl<Rend: WindowRenderer> View<Rend> {
                     };
 
                     self.doc.handle_ui_event(UiEvent::PointerCancel(event));
-                    self.request_redraw();
                 }
+
+                // The pointer left the window: end hover
+                let position = position.unwrap_or(self.pointer_pos);
+                let event = BlitzPointerEvent {
+                    id,
+                    is_primary: primary,
+                    coords: self.pointer_coords(position),
+                    button: Default::default(),
+                    buttons: self.buttons,
+                    mods: winit_modifiers_to_kbt_modifiers(self.keyboard_modifiers.state()),
+                    details: PointerDetails::default(),
+                    element: Default::default(),
+                    active_pointers: Arc::clone(&self.active_events),
+                };
+
+                self.doc.handle_ui_event(UiEvent::PointerLeave(event));
+                self.request_redraw();
             }
             WindowEvent::PointerMoved { position, source, primary, .. } => {
                 self.pointer_pos = position;

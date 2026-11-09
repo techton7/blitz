@@ -39,7 +39,8 @@
     display: none;
 }
 
-a {
+/* https://html.spec.whatwg.org/#phrasing-content-3: only links are styled */
+a[href] {
     color: rgb(0, 0, 238);
     text-decoration: underline;
 }
@@ -87,6 +88,32 @@ button {
 
 textarea {
     font-family: monospace;
+}
+
+/* https://html.spec.whatwg.org/multipage/rendering.html#form-controls */
+input,
+button,
+textarea {
+    letter-spacing: initial;
+    word-spacing: initial;
+    line-height: initial;
+}
+
+input,
+select,
+button,
+textarea {
+    text-transform: initial;
+    text-indent: initial;
+    text-shadow: initial;
+}
+
+/* https://html.spec.whatwg.org/multipage/rendering.html#the-select-element-2
+   (select only has native appearance here) */
+select {
+    letter-spacing: initial;
+    word-spacing: initial;
+    line-height: initial;
 }
 
 input:focus,
@@ -144,10 +171,6 @@ legend {
 
 option {
     display: none;
-}
-
-picture {
-    display: contents;
 }
 
 source {

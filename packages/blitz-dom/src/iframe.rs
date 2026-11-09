@@ -10,7 +10,7 @@ use blitz_traits::shell::ShellProvider;
 
 use crate::document::DocumentEvent;
 use crate::net::{DocumentSrcHandler, ResourceHandler, stamped_request};
-use crate::{BaseDocument, DocumentConfig, local_name};
+use crate::{BaseDocument, DocumentConfig, UserAgentStylesheet, local_name};
 
 /// Maximum nesting depth of documents-within-documents. Iframes nested deeper
 /// than this are not loaded (this guards against infinitely recursive
@@ -57,7 +57,7 @@ impl BaseDocument {
         DocumentConfig {
             viewport: None,
             base_url,
-            ua_stylesheets: None,
+            ua_stylesheets: vec![UserAgentStylesheet::default_sheet()],
             net_provider: Some(self.net_provider.clone()),
             navigation_provider: Some(Arc::new(IframeNavigationProvider {
                 node_id,
@@ -72,6 +72,9 @@ impl BaseDocument {
             incremental: Some(self.incremental_layout),
             abort_signal: Some(abort_signal),
             subdocument_depth: self.subdocument_depth + 1,
+            // A sub-document is a separate devtools target with its own provider
+            #[cfg(feature = "devtools")]
+            devtools_provider: None,
         }
     }
 

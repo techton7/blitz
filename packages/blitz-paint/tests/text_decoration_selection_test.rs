@@ -166,8 +166,8 @@ fn build_dual_font_ctx(helvetica_bytes: &[u8], emoji_bytes: &[u8]) -> FontContex
 }
 
 fn is_emoji_run(r: &parley::GlyphRun<'_, blitz_dom::node::TextBrush>) -> bool {
-    let font_blob = r.run().font().font.data.as_ref();
-    let face_index = r.run().font().font.index;
+    let font_blob = r.run().font().data.as_ref();
+    let face_index = r.run().font().index;
     ttf_parser::Face::parse(font_blob, face_index)
         .ok()
         .map(|f| f.tables().sbix.is_some())

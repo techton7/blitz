@@ -10,6 +10,12 @@ use accesskit_xplat::WindowEvent as AccessKitEvent;
 
 #[derive(Debug, Clone)]
 pub enum BlitzShellEvent {
+    SetClipboardText {
+        text: String,
+    },
+    RequestClipboardText {
+        window_id: WindowId,
+    },
     Poll {
         window_id: WindowId,
     },
@@ -36,6 +42,16 @@ pub enum BlitzShellEvent {
     Accessibility {
         window_id: WindowId,
         data: Arc<AccessKitEvent>,
+    },
+
+    /// Devtools protocol messages are waiting to be processed
+    #[cfg(feature = "devtools")]
+    DevtoolsPoll,
+
+    /// Open devtools inspecting the document with the given id
+    #[cfg(feature = "devtools")]
+    OpenDevtools {
+        doc_id: usize,
     },
 
     /// An arbitary event from the Blitz embedder

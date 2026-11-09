@@ -242,8 +242,8 @@ fn test_task11_ac1_mixed_text_emoji_shared_baseline_coordinate() {
             );
 
             let is_sbix_font = {
-                let font_blob = run.run().font().font.data.as_ref();
-                let face_index = run.run().font().font.index;
+                let font_blob = run.run().font().data.as_ref();
+                let face_index = run.run().font().index;
                 ttf_parser::Face::parse(font_blob, face_index)
                     .ok()
                     .map(|f| f.tables().sbix.is_some())

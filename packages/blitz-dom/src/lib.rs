@@ -75,11 +75,8 @@ pub use cssom::{CssRuleInfo, CssomError};
 pub use resolved_style::{
     css_property_is_supported, parse_transform_matrix, resolved_style_property_names,
 };
+pub use stylo_taffy::CopyStyleGetters;
 pub use stylo_to_kurbo::resolve_2d_transform;
-
-/// Extension marker trait for backwards compatibility with downstream callers.
-pub trait CopyStyleGetters {}
-impl CopyStyleGetters for style::properties::ComputedValues {}
 
 pub mod net;
 pub mod util;
@@ -89,6 +86,7 @@ mod accessibility;
 
 pub use crate::layout::paint_tree::{HoistedPaintChild, StackingContext, hoisted_child_position};
 pub use crate::layout::replaced::IntrinsicSizes;
+pub use crate::layout::text_transform::{full_size_kana, full_width};
 #[cfg(feature = "custom-widget")]
 pub use crate::node::Widget;
 
@@ -99,7 +97,7 @@ pub use taffy;
 pub use config::{DocumentConfig, StyleThreading};
 pub use document::{
     BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, EventCaptureHook, PlainDocument,
-    QueuedAnimationEvent,
+    QueuedAnimationEvent, UserAgentStylesheet,
 };
 pub use markup5ever::{
     LocalName, Namespace, NamespaceStaticSet, Prefix, PrefixStaticSet, QualName, local_name,

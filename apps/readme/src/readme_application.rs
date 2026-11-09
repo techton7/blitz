@@ -16,7 +16,8 @@ use winit::platform::macos::ApplicationHandlerExtMacOS;
 use winit::window::{Theme, WindowId};
 
 use crate::fetch;
-use crate::markdown::{BLITZ_MD_STYLES, GITHUB_MD_STYLES, markdown_to_html};
+use crate::markdown::{markdown_stylesheets, markdown_to_html};
+use blitz_dom::UserAgentStylesheet;
 
 pub struct ReadmeEvent;
 
@@ -81,7 +82,7 @@ impl ReadmeApplication {
             options.into_request(),
             Box::new(move |result| {
                 let (url, bytes) = result.unwrap();
-                let contents = std::str::from_utf8(&bytes).unwrap().to_string();
+                let contents = String::from_utf8_lossy(&bytes).into_owned();
                 proxy.send_event(BlitzShellEvent::NavigationLoad {
                     url,
                     contents,
@@ -100,18 +101,17 @@ impl ReadmeApplication {
         is_md: bool,
     ) {
         let mut html = contents;
-        let mut stylesheets = Vec::new();
+        let mut stylesheets = vec![UserAgentStylesheet::default_sheet()];
         if is_md {
             html = markdown_to_html(html);
-            stylesheets.push(String::from(GITHUB_MD_STYLES));
-            stylesheets.push(String::from(BLITZ_MD_STYLES));
+            stylesheets.extend(markdown_stylesheets());
         }
 
         let doc = HtmlDocument::from_html(
             &html,
             DocumentConfig {
                 base_url: Some(url),
-                ua_stylesheets: Some(stylesheets),
+                ua_stylesheets: stylesheets,
                 net_provider: Some(self.net_provider.clone()),
                 navigation_provider: Some(self.navigation_provider.clone()),
                 ..Default::default()

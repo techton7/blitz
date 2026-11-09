@@ -4,6 +4,7 @@
 #![allow(clippy::collapsible_if)]
 
 pub mod bitmap_glyph;
+mod blend;
 mod color;
 mod debug_overlay;
 mod filters;

@@ -40,6 +40,8 @@ log-frame-times = [
 ]
 log-phase-times = ["blitz-dom/log-phase-times"]
 tracing = ["dep:tracing-subscriber", "blitz-shell/tracing", "blitz-net/tracing", "blitz-html/tracing"]
+devtools = ["blitz-shell/devtools"]
+embedded-devtools-frontend = ["devtools", "blitz-shell/embedded-devtools-frontend"]
 
 [dependencies]
 blitz-traits = { workspace = true }
@@ -57,7 +59,7 @@ tokio = { workspace = true, features = ["rt"] }
 reqwest = { workspace = true }
 url = { workspace = true }
 winit = { workspace = true }
-comrak = { version = "0.55", default-features = false, optional = true }
+comrak = { version = "0.56", default-features = false, optional = true }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"], optional = true }
 image = { workspace = true, default-features = false, optional = true }
 notify = "8.0.0"

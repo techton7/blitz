@@ -8,6 +8,11 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
+use winit::{
+    data_transfer::{DataTransferSendBuilder, TypeHint},
+    event_loop::AsyncRequestSerial,
+};
+
 #[cfg(target_os = "macos")]
 use winit::platform::macos::ApplicationHandlerExtMacOS;
 
@@ -18,16 +23,41 @@ pub struct BlitzApplication<Rend: WindowRenderer> {
     pub pending_windows: Vec<WindowConfig<Rend>>,
     pub proxy: BlitzShellProxy,
     pub event_queue: Receiver<BlitzShellEvent>,
+    pending_clipboard: HashMap<AsyncRequestSerial, WindowId>,
+    #[cfg(feature = "devtools")]
+    pub(crate) devtools: crate::devtools::DevtoolsState,
+}
+
+/// Whether a document or (recursively) any of its sub-documents has the
+/// given id
+fn document_contains_id(doc: &blitz_dom::BaseDocument, doc_id: usize) -> bool {
+    if doc.id() == doc_id {
+        return true;
+    }
+    doc.sub_document_node_ids().iter().any(|&node_id| {
+        doc.get_node(node_id)
+            .and_then(|node| node.subdoc())
+            .is_some_and(|sub_doc| document_contains_id(&sub_doc.inner(), doc_id))
+    })
 }
 
 impl<Rend: WindowRenderer> BlitzApplication<Rend> {
     pub fn new(proxy: BlitzShellProxy, event_queue: Receiver<BlitzShellEvent>) -> Self {
-        BlitzApplication {
+        #[allow(unused_mut)]
+        let mut app = BlitzApplication {
             windows: HashMap::new(),
             pending_windows: Vec::new(),
             proxy,
             event_queue,
-        }
+            pending_clipboard: HashMap::new(),
+            #[cfg(feature = "devtools")]
+            devtools: Default::default(),
+        };
+
+        #[cfg(feature = "devtools")]
+        app.start_cdp_server_from_env();
+
+        app
     }
 
     pub fn add_window(&mut self, window_config: WindowConfig<Rend>) {
@@ -35,7 +65,9 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
     }
 
     fn window_mut_by_doc_id(&mut self, doc_id: usize) -> Option<&mut View<Rend>> {
-        self.windows.values_mut().find(|w| w.doc.id() == doc_id)
+        self.windows
+            .values_mut()
+            .find(|w| document_contains_id(&w.doc.inner(), doc_id))
     }
 
     pub fn handle_blitz_shell_event(
@@ -44,6 +76,22 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
         event: BlitzShellEvent,
     ) {
         match event {
+            BlitzShellEvent::SetClipboardText { text } => {
+                let data = DataTransferSendBuilder::new(text)
+                    .with_type(TypeHint::Plaintext, |text, _| Some(text.clone()))
+                    .build();
+                if let Err(_error) = event_loop.set_clipboard(data) {
+                    #[cfg(feature = "tracing")]
+                    tracing::error!("Failed to set clipboard: {_error}");
+                }
+            }
+            BlitzShellEvent::RequestClipboardText { window_id } => {
+                if let Ok(Some(id)) = event_loop.clipboard()
+                    && let Ok(serial) = event_loop.fetch_data_transfer(id, &TypeHint::Plaintext)
+                {
+                    self.pending_clipboard.insert(serial, window_id);
+                }
+            }
             BlitzShellEvent::Poll { window_id } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
                     window.poll();
@@ -90,6 +138,10 @@ impl<Rend: WindowRenderer> BlitzApplication<Rend> {
                     }
                 }
             }
+            #[cfg(feature = "devtools")]
+            BlitzShellEvent::DevtoolsPoll => self.process_devtools_messages(),
+            #[cfg(feature = "devtools")]
+            BlitzShellEvent::OpenDevtools { doc_id } => self.open_devtools(doc_id),
             BlitzShellEvent::Embedder(_) => {
                 // Do nothing. Should be handled by embedders (if required).
             }
@@ -147,6 +199,30 @@ impl<Rend: WindowRenderer> ApplicationHandler for BlitzApplication<Rend> {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        if let WindowEvent::DataTransferReceived { serial, value, .. } = &event
+            && let Some(&requesting_window) = self.pending_clipboard.get(serial)
+        {
+            let result = value.try_as_string();
+            if result
+                .as_ref()
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+            {
+                return;
+            }
+            self.pending_clipboard.remove(serial);
+            if let Ok(text) = result
+                && let Some(window) = self.windows.get_mut(&requesting_window)
+            {
+                window
+                    .doc
+                    .handle_ui_event(blitz_traits::events::UiEvent::Paste(text));
+                window.request_redraw();
+                self.proxy.send_event(BlitzShellEvent::Poll {
+                    window_id: requesting_window,
+                });
+            }
+            return;
+        }
         // Exit the app when window close is requested.
         if matches!(event, WindowEvent::CloseRequested) {
             // Drop window before exiting event loop
@@ -164,6 +240,11 @@ impl<Rend: WindowRenderer> ApplicationHandler for BlitzApplication<Rend> {
             "window_event: {:?}",
             std::mem::discriminant(&event)
         );
+
+        #[cfg(feature = "devtools")]
+        if self.handle_picker_event(window_id, &event) {
+            return;
+        }
         if let Some(window) = self.windows.get_mut(&window_id) {
             window.handle_winit_event(event);
         }

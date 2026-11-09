@@ -5,6 +5,7 @@ use blitz_traits::events::{BlitzScrollEvent, DomEvent, DomEventData};
 use blitz_traits::node_id::NodeId;
 use style::properties::generated::longhands::position::computed_value::T as Position;
 use style::values::computed::Overflow;
+use stylo_taffy::CopyStyleGetters;
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::BaseDocument;
@@ -155,7 +156,7 @@ impl BaseDocument {
         }
 
         let include_hidden = request.source == ScrollSource::Programmatic;
-        let (current, max) = self.scroll_state(target, include_hidden);
+        let (current, min, max) = self.scroll_state(target, include_hidden);
         let unclamped = match request.amount {
             ScrollAmount::To(to) => to,
             ScrollAmount::By(by) => Point {
@@ -164,8 +165,8 @@ impl BaseDocument {
             },
         };
         let end = Point {
-            x: unclamped.x.clamp(0.0, max.x),
-            y: unclamped.y.clamp(0.0, max.y),
+            x: unclamped.x.clamp(min.x, max.x),
+            y: unclamped.y.clamp(min.y, max.y),
         };
 
         if self.should_scroll_smoothly(target, request.behavior) {
@@ -306,13 +307,8 @@ impl BaseDocument {
                     let event = BlitzScrollEvent {
                         scroll_top: offset.y,
                         scroll_left: offset.x,
-                        scroll_width: layout.size.width.max(layout.scrollable_overflow_rect.right)
-                            as i32,
-                        scroll_height: layout
-                            .size
-                            .height
-                            .max(layout.scrollable_overflow_rect.bottom)
-                            as i32,
+                        scroll_width: layout.size.width.max(root.scroll_width()) as i32,
+                        scroll_height: layout.size.height.max(root.scroll_height()) as i32,
                         client_width: (self.viewport.window_size.0 as f64 / scale) as i32,
                         client_height: (self.viewport.window_size.1 as f64 / scale) as i32,
                     };
@@ -333,13 +329,15 @@ impl BaseDocument {
                     return false;
                 }
 
+                let scroll_width = node.scroll_width();
+                let scroll_height = node.scroll_height();
                 let layout = *node.final_layout();
                 self.nodes.bump_geometry_generation();
                 let event = BlitzScrollEvent {
                     scroll_top: offset.y,
                     scroll_left: offset.x,
-                    scroll_width: layout.scroll_width() as i32,
-                    scroll_height: layout.scroll_height() as i32,
+                    scroll_width: scroll_width as i32,
+                    scroll_height: scroll_height as i32,
                     client_width: layout.size.width as i32,
                     client_height: layout.size.height as i32,
                 };
@@ -434,15 +432,15 @@ impl BaseDocument {
     /// Duration (in milliseconds) of an animated scroll.
     const SMOOTH_SCROLL_DURATION_MS: f64 = 300.0;
 
-    /// Returns the current scroll offset and the maximum scroll offset (the minimum is
-    /// always `0`) for the given scroll target. `include_hidden` controls whether
+    /// Returns the current, minimum and maximum scroll offsets for the given
+    /// scroll target. `include_hidden` controls whether
     /// `overflow: hidden` axes count as scrollable (they do for programmatic scrolls,
     /// which apply to any scrolling box, but not for user scrolls).
     pub(crate) fn scroll_state(
         &self,
         target: ScrollTarget,
         include_hidden: bool,
-    ) -> (Point<f64>, Point<f64>) {
+    ) -> (Point<f64>, Point<f64>, Point<f64>) {
         match self.canonical_scroll_target(target) {
             ScrollTarget::Viewport => {
                 // The viewport scrolls the root element's scrollable overflow, which includes
@@ -453,12 +451,8 @@ impl BaseDocument {
                     Some(root) => {
                         let layout = root.final_layout();
                         (
-                            layout.size.width.max(layout.scrollable_overflow_rect.right) as f64,
-                            layout
-                                .size
-                                .height
-                                .max(layout.scrollable_overflow_rect.bottom)
-                                as f64,
+                            layout.size.width.max(root.scroll_width()) as f64,
+                            layout.size.height.max(root.scroll_height()) as f64,
                         )
                     }
                     None => (0.0, 0.0),
@@ -470,11 +464,11 @@ impl BaseDocument {
                     x: (content_width - window_width).max(0.0),
                     y: (content_height - window_height).max(0.0),
                 };
-                (self.viewport_scroll(), max)
+                (self.viewport_scroll(), Point::ZERO, max)
             }
             ScrollTarget::Node(node_id) => {
                 let Some(node) = self.nodes.get(node_id) else {
-                    return (Point::ZERO, Point::ZERO);
+                    return (Point::ZERO, Point::ZERO, Point::ZERO);
                 };
 
                 // An axis with a non-scrolling overflow value has no scrollable range, even
@@ -493,17 +487,22 @@ impl BaseDocument {
                         )
                     })
                     .unwrap_or((false, false));
+                let (min, max) = node.scroll_range();
+                let min = Point {
+                    x: if can_x_scroll { min.x } else { 0.0 },
+                    y: if can_y_scroll { min.y } else { 0.0 },
+                };
                 let max = Point {
                     x: match can_x_scroll {
-                        true => node.final_layout().scroll_width() as f64,
+                        true => max.x,
                         false => 0.0,
                     },
                     y: match can_y_scroll {
-                        true => node.final_layout().scroll_height() as f64,
+                        true => max.y,
                         false => 0.0,
                     },
                 };
-                (*node.scroll_offset(), max)
+                (*node.scroll_offset(), min, max)
             }
         }
     }
@@ -658,7 +657,7 @@ impl BaseDocument {
                 .primary_styles()
                 .is_some_and(|styles| matches!(styles.clone_position(), Position::Fixed));
 
-            let (_current, max) = self.scroll_state(ScrollTarget::Node(ancestor_id), false);
+            let (_current, _min, max) = self.scroll_state(ScrollTarget::Node(ancestor_id), false);
             let (can_scroll_x, can_scroll_y) = ancestor
                 .primary_styles()
                 .map(|styles| {
@@ -703,7 +702,7 @@ impl BaseDocument {
             let scale = self.viewport.scale() as f64;
             let viewport_width = self.viewport.window_size.0 as f64 / scale;
             let viewport_height = self.viewport.window_size.1 as f64 / scale;
-            let (current, max) = self.scroll_state(ScrollTarget::Viewport, false);
+            let (current, _min, max) = self.scroll_state(ScrollTarget::Viewport, false);
             let can_scroll_x = max.x > 0.5;
             let can_scroll_y = max.y > 0.5;
             (
@@ -726,7 +725,7 @@ impl BaseDocument {
             let target_start_y = (node_abs.y - container_abs.y - container_border.top) as f64;
             let viewport_width = container.client_width() as f64;
             let viewport_height = container.client_height() as f64;
-            let (current, max) = self.scroll_state(ScrollTarget::Node(target_container), false);
+            let (current, _min, max) = self.scroll_state(ScrollTarget::Node(target_container), false);
             let (can_scroll_x, can_scroll_y) = container
                 .primary_styles()
                 .map(|styles| {

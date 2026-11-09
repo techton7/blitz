@@ -1,4 +1,5 @@
 use anyrender::PaintScene;
+use blitz_dom::CopyStyleGetters;
 use blitz_dom::{BaseDocument, NodeId, node::TextBrush, util::ToColorColor};
 use kurbo::{Affine, BezPath, Cap, Circle, Rect, Stroke};
 use parley::{Affinity, Cursor, Layout, Line, PositionedLayoutItem, Selection};
@@ -137,6 +138,8 @@ struct ResolvedDecoration {
     underline_offset: Option<LengthPercentage>,
     /// Whether `text-underline-position: under` is in effect.
     underline_under: bool,
+    /// Whether `text-underline-position: from-font` is in effect.
+    underline_from_font: bool,
     /// `text-decoration-inset`. Resolved per run.
     inset: GenericTextDecorationInset<LengthPercentage>,
 }
@@ -146,9 +149,9 @@ struct ResolvedDecoration {
 /// consecutive runs doesn't re-resolve them.
 struct DecorationStackEntry {
     node_id: NodeId,
-    /// This node's (inherited) text colour, used for the glyphs of runs whose
+    /// This node's (inherited) text fill colour, used for the glyphs of runs whose
     /// innermost node is this one.
-    text_color: Color,
+    fill_color: Color,
     /// The decoration this node introduces as a decorating box, if any.
     decoration: Option<ResolvedDecoration>,
 }
@@ -158,7 +161,7 @@ fn resolve_decoration_entry(doc: &BaseDocument, node_id: NodeId) -> DecorationSt
     let Some(styles) = doc.get_node(node_id).and_then(|node| node.primary_styles()) else {
         return DecorationStackEntry {
             node_id,
-            text_color: Color::BLACK,
+            fill_color: Color::BLACK,
             decoration: None,
         };
     };
@@ -166,6 +169,10 @@ fn resolve_decoration_entry(doc: &BaseDocument, node_id: NodeId) -> DecorationSt
     let itext = styles.get_inherited_text();
     let text = styles.get_text();
     let text_color = itext.color.as_color_color();
+    let fill_color = itext
+        ._webkit_text_fill_color
+        .resolve_to_absolute(&itext.color)
+        .as_srgb_color();
 
     let drawn_lines = TextDecorationLine::UNDERLINE
         | TextDecorationLine::OVERLINE
@@ -192,13 +199,16 @@ fn resolve_decoration_entry(doc: &BaseDocument, node_id: NodeId) -> DecorationSt
             underline_under: itext
                 .text_underline_position
                 .contains(TextUnderlinePosition::UNDER),
+            underline_from_font: itext
+                .text_underline_position
+                .contains(TextUnderlinePosition::FROM_FONT),
             inset: text.text_decoration_inset.clone(),
         }
     });
 
     DecorationStackEntry {
         node_id,
-        text_color,
+        fill_color,
         decoration,
     }
 }
@@ -323,7 +333,7 @@ fn draw_decoration_line(
     let butt_stroke = Stroke::new(size).with_caps(Cap::Butt);
 
     match deco_style {
-        TextDecorationStyle::MozNone => {
+        TextDecorationStyle::None => {
             // no line. Equivalent to `text-decoration-line: none`
         }
         // `solid`
@@ -401,16 +411,35 @@ fn draw_decoration_line(
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct TextPaintOptions {
+    pub scale: f64,
+    pub brush_override: Option<Color>,
+}
+
+impl From<f64> for TextPaintOptions {
+    fn from(scale: f64) -> Self {
+        Self {
+            scale,
+            brush_override: None,
+        }
+    }
+}
+
 /// Paint the decorations accumulated for one line, one line per decorating box.
 fn flush_line_decorations(
     scene: &mut impl PaintScene,
     transform: Affine,
-    scale: f64,
+    options: TextPaintOptions,
     deco_boxes: &[LineDecoration],
     win_ascent_ratios: &mut WinAscentCache,
     inline_root_id: NodeId,
     line_baseline: f32,
 ) {
+    let TextPaintOptions {
+        scale,
+        brush_override,
+    } = options;
     // Draw innermost boxes first so ancestors' decorations paint on top, matching the
     // per-run drawing order this replaced (`stack.iter().rev()`).
     for acc in deco_boxes.iter().rev() {
@@ -435,7 +464,7 @@ fn flush_line_decorations(
         if width <= 0.0 {
             continue;
         }
-        let brush = anyrender::Paint::from(deco.color);
+        let brush = anyrender::Paint::from(brush_override.unwrap_or(deco.color));
 
         // `text-decoration-inset` shortens (or, when negative, extends) the line from the
         // inline-start/end edges. Percentages resolve against the decoration line length
@@ -474,8 +503,12 @@ fn flush_line_decorations(
             // (below descenders) rather than at the font's suggested position near the
             // alphabetic baseline. We anchor the top of the line at the descent so it clears
             // descending glyphs like "gqy".
+            // An explicit offset under `auto` is taken from the alphabetic
+            // baseline, as CSS and Chrome have it, not from the auto gap.
             let base_offset = if deco.underline_under {
                 -geom.descent
+            } else if deco.underline_offset.is_some() && !deco.underline_from_font {
+                0.0
             } else {
                 geom.underline_offset
             };
@@ -574,10 +607,15 @@ pub fn stroke_text<'a>(
     lines: impl Iterator<Item = Line<'a, TextBrush>>,
     doc: &BaseDocument,
     transform: Affine,
-    scale: f64,
+    options: impl Into<TextPaintOptions>,
     inline_root_id: NodeId,
     context: &mut DrawTextContext,
 ) {
+    let options: TextPaintOptions = options.into();
+    let TextPaintOptions {
+        scale,
+        brush_override,
+    } = options;
     let DrawTextContext {
         stack,
         path_scratch,
@@ -608,7 +646,7 @@ pub fn stroke_text<'a>(
         for item in line.items() {
             if let PositionedLayoutItem::GlyphRun(glyph_run) = item {
                 let run = glyph_run.run();
-                let font = &run.font().font;
+                let font = run.font();
                 let font_size = run.font_size();
                 let metrics = run.font_metrics();
                 let style = glyph_run.style();
@@ -643,13 +681,11 @@ pub fn stroke_text<'a>(
                     stack.push(resolve_decoration_entry(doc, node_id));
                 }
 
-                // The glyph colour comes from the run's own node (the stack top): `color`
-                // inherits, so the innermost inline element already carries the right value.
-                let text_color = stack.last().map(|e| e.text_color).unwrap_or(Color::BLACK);
+                let fill_color = brush_override
+                    .unwrap_or_else(|| stack.last().map(|e| e.fill_color).unwrap_or(Color::BLACK));
 
                 let embolden = if FONT_EMBOLDEN_ENABLED {
-                    let fs = font_size as f64 / scale;
-                    kurbo::Vec2::new((0.015125 * fs).min(0.3), (0.0121 * fs).min(0.3))
+                    font_embolden(font_size as f64, fill_color, transform)
                 } else {
                     kurbo::Vec2::default()
                 };
@@ -669,103 +705,105 @@ pub fn stroke_text<'a>(
                     })
                     .unwrap_or(false);
 
-                if !has_raster_tables {
-                    let normalized_coords: &[i16] = bytemuck::cast_slice(run.normalized_coords());
-                    scene.draw_glyphs(
-                        font,
-                        font_size,
-                        !FONT_EMBOLDEN_ENABLED, // hint
-                        normalized_coords,
-                        embolden,
-                        Fill::NonZero,
-                        &anyrender::Paint::from(text_color),
-                        1.0, // alpha
-                        transform,
-                        glyph_xform,
-                        glyph_run.positioned_glyphs().map(|glyph| anyrender::Glyph {
-                            id: glyph.id as _,
-                            x: glyph.x,
-                            y: glyph.y,
-                        }),
-                    );
-                } else {
-                    let target_ppem = font_size.round().max(1.0) as u16;
-                    let normalized_coords: &[i16] = bytemuck::cast_slice(run.normalized_coords());
-                    vector_glyphs_scratch.clear();
-
-                    for glyph in glyph_run.positioned_glyphs() {
-                        let glyph_id = glyph.id as u16;
-                        let raster_glyph =
-                            extract_raster_glyph(font_blob, face_index, glyph_id, target_ppem);
-                        if let Some(raster_glyph) = raster_glyph {
-                            // Flush preceding vector glyphs to preserve exact draw order
-                            if !vector_glyphs_scratch.is_empty() {
-                                scene.draw_glyphs(
-                                    font,
-                                    font_size,
-                                    !FONT_EMBOLDEN_ENABLED,
-                                    normalized_coords,
-                                    embolden,
-                                    Fill::NonZero,
-                                    &anyrender::Paint::from(text_color),
-                                    1.0,
-                                    transform,
-                                    glyph_xform,
-                                    vector_glyphs_scratch.iter().copied(),
-                                );
-                                vector_glyphs_scratch.clear();
-                            }
-
-                            let key = BitmapCacheKey {
-                                font_key,
-                                face_index,
-                                glyph_id,
-                                strike_ppem: raster_glyph.strike_ppem,
-                            };
-
-                            let maybe_image = if let Some(cache) = custom_bitmap_glyph_cache {
-                                cache.get_or_decode(key, &raster_glyph.data)
-                            } else {
-                                let mut global = BitmapGlyphCache::global().lock().unwrap();
-                                global.get_or_decode(key, &raster_glyph.data)
-                            };
-
-                            if let Some(image_data) = maybe_image {
-                                let (placement_transform, _bounds) =
-                                    compute_bitmap_placement_transform(
-                                        glyph.x,
-                                        glyph.y,
-                                        font_size,
-                                        &raster_glyph,
-                                    );
-                                let glyph_transform = transform * placement_transform;
-                                scene.draw_image((&image_data).into(), glyph_transform);
-                            }
-                        } else {
-                            vector_glyphs_scratch.push(anyrender::Glyph {
-                                id: glyph.id as _,
-                                x: glyph.x,
-                                y: glyph.y,
-                            });
-                        }
-                    }
-
-                    // Flush remaining trailing vector glyphs
-                    if !vector_glyphs_scratch.is_empty() {
+                let normalized_coords: &[i16] = bytemuck::cast_slice(run.normalized_coords());
+                // Zero-size text is invisible, but hinting can give its glyphs ink.
+                if font_size > 0.0 {
+                    if !has_raster_tables {
                         scene.draw_glyphs(
                             font,
                             font_size,
-                            !FONT_EMBOLDEN_ENABLED,
+                            !FONT_EMBOLDEN_ENABLED, // hint
                             normalized_coords,
                             embolden,
                             Fill::NonZero,
-                            &anyrender::Paint::from(text_color),
-                            1.0,
+                            &anyrender::Paint::from(fill_color),
+                            1.0, // alpha
                             transform,
                             glyph_xform,
-                            vector_glyphs_scratch.iter().copied(),
+                            glyph_run.positioned_glyphs().map(|glyph| anyrender::Glyph {
+                                id: glyph.id as _,
+                                x: glyph.x,
+                                y: glyph.y,
+                            }),
                         );
+                    } else {
+                        let target_ppem = font_size.round().max(1.0) as u16;
                         vector_glyphs_scratch.clear();
+
+                        for glyph in glyph_run.positioned_glyphs() {
+                            let glyph_id = glyph.id as u16;
+                            let raster_glyph =
+                                extract_raster_glyph(font_blob, face_index, glyph_id, target_ppem);
+                            if let Some(raster_glyph) = raster_glyph {
+                                // Flush preceding vector glyphs to preserve exact draw order
+                                if !vector_glyphs_scratch.is_empty() {
+                                    scene.draw_glyphs(
+                                        font,
+                                        font_size,
+                                        !FONT_EMBOLDEN_ENABLED,
+                                        normalized_coords,
+                                        embolden,
+                                        Fill::NonZero,
+                                        &anyrender::Paint::from(fill_color),
+                                        1.0,
+                                        transform,
+                                        glyph_xform,
+                                        vector_glyphs_scratch.iter().copied(),
+                                    );
+                                    vector_glyphs_scratch.clear();
+                                }
+
+                                let key = BitmapCacheKey {
+                                    font_key,
+                                    face_index,
+                                    glyph_id,
+                                    strike_ppem: raster_glyph.strike_ppem,
+                                };
+
+                                let maybe_image = if let Some(cache) = custom_bitmap_glyph_cache {
+                                    cache.get_or_decode(key, &raster_glyph.data)
+                                } else {
+                                    let mut global = BitmapGlyphCache::global().lock().unwrap();
+                                    global.get_or_decode(key, &raster_glyph.data)
+                                };
+
+                                if let Some(image_data) = maybe_image {
+                                    let (placement_transform, _bounds) =
+                                        compute_bitmap_placement_transform(
+                                            glyph.x,
+                                            glyph.y,
+                                            font_size,
+                                            &raster_glyph,
+                                        );
+                                    let glyph_transform = transform * placement_transform;
+                                    scene.draw_image((&image_data).into(), glyph_transform);
+                                }
+                            } else {
+                                vector_glyphs_scratch.push(anyrender::Glyph {
+                                    id: glyph.id as _,
+                                    x: glyph.x,
+                                    y: glyph.y,
+                                });
+                            }
+                        }
+
+                        // Flush remaining trailing vector glyphs
+                        if !vector_glyphs_scratch.is_empty() {
+                            scene.draw_glyphs(
+                                font,
+                                font_size,
+                                !FONT_EMBOLDEN_ENABLED,
+                                normalized_coords,
+                                embolden,
+                                Fill::NonZero,
+                                &anyrender::Paint::from(fill_color),
+                                1.0,
+                                transform,
+                                glyph_xform,
+                                vector_glyphs_scratch.iter().copied(),
+                            );
+                            vector_glyphs_scratch.clear();
+                        }
                     }
                 }
 
@@ -824,7 +862,7 @@ pub fn stroke_text<'a>(
         flush_line_decorations(
             scene,
             transform,
-            scale,
+            options,
             deco_boxes,
             win_ascent_ratios,
             inline_root_id,
@@ -850,4 +888,42 @@ pub fn draw_text_selection(
         let rect = kurbo::Rect::new(rect.x0, rect.y0, rect.x1, rect.y1);
         scene.fill(Fill::NonZero, transform, SELECTION_COLOR, None, &rect);
     });
+}
+
+/// Approximates macOS font smoothing (stem dilation). CoreGraphics dilates each side by an amount
+/// in device pixels that grows with the device ppem up to 0.3px (fitted to Safari's ink at 9-72px
+/// and 1x-3x scale), and keeps dilating at large sizes, so there is no ppem cutoff. glifo applies
+/// the embolden in user units, so the device amounts are divided by the transform's scale.
+fn font_embolden(font_size: f64, color: Color, transform: Affine) -> kurbo::Vec2 {
+    const MAX_DEVICE_EMBOLDEN: f64 = 0.3;
+    let [a, b, c, d, _, _] = transform.as_coeffs();
+    let (scale_x, scale_y) = (a.hypot(b), c.hypot(d));
+    let device_ppem = font_size * (a * d - b * c).abs().sqrt();
+    if scale_x == 0.0 || scale_y == 0.0 || !device_ppem.is_finite() {
+        return kurbo::Vec2::default();
+    }
+    let fs = device_ppem * embolden_scale(color);
+    kurbo::Vec2::new(
+        (0.0121 * fs).min(MAX_DEVICE_EMBOLDEN) / scale_x,
+        (0.015125 * fs).min(MAX_DEVICE_EMBOLDEN) / scale_y,
+    )
+}
+
+/// Scales Pathfinder's stem-darkening factors by the text's relative luminance. CoreText
+/// dilates light text more than dark text; the points are fitted to Safari's ink for text
+/// colours from black to white on black and white backgrounds.
+fn embolden_scale(color: Color) -> f64 {
+    const POINTS: [(f64, f64); 4] = [(0.1, 0.5), (0.125, 0.72), (0.35, 0.72), (1.0, 1.3)];
+    let lum = color.discard_alpha().relative_luminance() as f64;
+    let mut prev = POINTS[0];
+    if lum <= prev.0 {
+        return prev.1;
+    }
+    for point in &POINTS[1..] {
+        if lum <= point.0 {
+            return prev.1 + (point.1 - prev.1) * (lum - prev.0) / (point.0 - prev.0);
+        }
+        prev = *point;
+    }
+    prev.1
 }
