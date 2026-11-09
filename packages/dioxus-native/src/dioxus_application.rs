@@ -194,42 +194,23 @@ impl ApplicationHandler for DioxusNativeApplication {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        if matches!(event, WindowEvent::RedrawRequested) {
-            if let Some(window) = self.inner.windows.get_mut(&window_id) {
-                // 1. Pre-resolve layout so that frame observers and layout observers
-                // (e.g. notify_layout_observers / ResizeObserver) observe settled layout
-                // dimensions instead of initial unresolved 0x0 rects.
-                let animation_time = window.current_animation_time();
-                window.doc.inner_mut().resolve(animation_time);
-            }
-
-            // 2. Dispatch frame observers, layout observers, and custom handlers
-            self.event_handlers
-                .apply_event(window_id, &event, event_loop);
-
-            // 3. Flush any Dioxus reactive signal mutations triggered during observer execution
-            // (e.g. readiness_sig or floating placement changes). If VDOM mutations occurred,
-            // re-resolve layout before the final scene paint.
-            if let Some(window) = self.inner.windows.get_mut(&window_id) {
-                if window.poll() {
-                    let animation_time = window.current_animation_time();
-                    window.doc.inner_mut().resolve(animation_time);
-                }
-            }
-
-            // 4. Paint and present the window
-            self.inner.window_event(event_loop, window_id, event);
-        } else {
-            self.event_handlers
-                .apply_event(window_id, &event, event_loop);
-
-            // Flush Dioxus VDOM mutations immediately for interactive window events (click, key, etc.)
-            if let Some(window) = self.inner.windows.get_mut(&window_id) {
-                window.poll();
-            }
-
-            self.inner.window_event(event_loop, window_id, event);
+        // Resolve layout before RedrawRequested handlers so observers read settled geometry
+        if matches!(event, WindowEvent::RedrawRequested)
+            && let Some(window) = self.inner.windows.get_mut(&window_id)
+        {
+            let animation_time = window.current_animation_time();
+            window.doc.inner_mut().resolve(animation_time);
         }
+
+        self.event_handlers
+            .apply_event(window_id, &event, event_loop);
+
+        // Flush reactive VirtualDom mutations immediately before the view redraws
+        if let Some(window) = self.inner.windows.get_mut(&window_id) {
+            window.poll();
+        }
+
+        self.inner.window_event(event_loop, window_id, event);
     }
 
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
