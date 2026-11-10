@@ -81,6 +81,12 @@ impl BaseDocument {
             nodes.insert(node_id, (id, builder));
         }
 
+        let focus = self
+            .focus_node_id
+            .filter(|id| nodes.contains_key(id))
+            .map(|id| NodeId(id.as_u64()))
+            .unwrap_or(NodeId(u64::MAX));
+
         let mut nodes: Vec<_> = nodes
             .into_iter()
             .map(|(_, (id, node))| (id, node))
@@ -92,7 +98,7 @@ impl BaseDocument {
             tree_id: TreeId::ROOT,
             nodes,
             tree: Some(tree),
-            focus: NodeId(self.focus_node_id.map(|id| id.as_u64()).unwrap_or(u64::MAX)),
+            focus,
         }
     }
 
@@ -427,5 +433,95 @@ fn role_from_element_data(element_data: &ElementData) -> Option<Role> {
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::qual_name;
+    use blitz_traits::shell::{ColorScheme, Viewport};
+
+    #[test]
+    fn focused_node_in_hidden_container_omitted_from_tree_update_focus() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig {
+            viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            ..Default::default()
+        });
+        doc.add_user_agent_stylesheet(crate::UserAgentStylesheet::parse(
+            "html, body, div, button { display: block; } .hidden { visibility: hidden; } .none { display: none; }",
+        ));
+        let root_id = doc.root_node().id;
+        let mut mutator = doc.mutate();
+        let html = mutator.create_element(qual_name!("html"), vec![]);
+        let body = mutator.create_element(qual_name!("body"), vec![]);
+        let container = mutator.create_element(qual_name!("div"), vec![]);
+        let button = mutator.create_element(qual_name!("button"), vec![]);
+        mutator.append_children(container, &[button]);
+        mutator.append_children(body, &[container]);
+        mutator.append_children(html, &[body]);
+        mutator.append_children(root_id, &[html]);
+        drop(mutator);
+
+        doc.resolve(0.0);
+        assert!(doc.set_focus_to(button));
+        assert_eq!(doc.focus_node_id, Some(button));
+
+        // When visible, button is emitted as focus
+        let tree_update = doc.build_accessibility_tree();
+        assert_eq!(tree_update.focus, NodeId(button.as_u64()));
+        assert!(tree_update.nodes.iter().any(|(id, _)| *id == NodeId(button.as_u64())));
+
+        // When container becomes visibility: hidden, button is omitted from nodes and focus is MAX
+        doc.mutate().set_attribute(container, qual_name!("class"), "hidden");
+        doc.resolve(0.0);
+
+        let tree_update_hidden = doc.build_accessibility_tree();
+        assert_eq!(tree_update_hidden.focus, NodeId(u64::MAX));
+        assert!(!tree_update_hidden.nodes.iter().any(|(id, _)| *id == NodeId(button.as_u64())));
+
+        // When container becomes display: none, button is also omitted from nodes and focus is MAX
+        doc.mutate().set_attribute(container, qual_name!("class"), "none");
+        doc.resolve(0.0);
+
+        let tree_update_none = doc.build_accessibility_tree();
+        assert_eq!(tree_update_none.focus, NodeId(u64::MAX));
+        assert!(!tree_update_none.nodes.iter().any(|(id, _)| *id == NodeId(button.as_u64())));
+    }
+
+    #[test]
+    fn focused_node_in_removed_container_clears_focus_and_emits_max_in_tree_update() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig {
+            viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            ..Default::default()
+        });
+        doc.add_user_agent_stylesheet(crate::UserAgentStylesheet::parse(
+            "html, body, div, button { display: block; }",
+        ));
+        let root_id = doc.root_node().id;
+        let mut mutator = doc.mutate();
+        let html = mutator.create_element(qual_name!("html"), vec![]);
+        let body = mutator.create_element(qual_name!("body"), vec![]);
+        let container = mutator.create_element(qual_name!("div"), vec![]);
+        let button = mutator.create_element(qual_name!("button"), vec![]);
+        mutator.append_children(container, &[button]);
+        mutator.append_children(body, &[container]);
+        mutator.append_children(html, &[body]);
+        mutator.append_children(root_id, &[html]);
+        drop(mutator);
+
+        doc.resolve(0.0);
+        assert!(doc.set_focus_to(button));
+        assert_eq!(doc.focus_node_id, Some(button));
+
+        // Removing the container should clear focus on BaseDocument via clear_interaction_state_for_removed_node
+        doc.mutate().remove_and_drop_node(container);
+        doc.resolve(0.0);
+
+        assert_eq!(doc.focus_node_id, None);
+
+        let tree_update = doc.build_accessibility_tree();
+        assert_eq!(tree_update.focus, NodeId(u64::MAX));
+        assert!(!tree_update.nodes.iter().any(|(id, _)| *id == NodeId(button.as_u64())));
     }
 }

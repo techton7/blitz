@@ -1079,13 +1079,20 @@ impl BaseDocument {
         if self.active_node_id == Some(node_id) {
             self.active_node_id = self.nearest_surviving_element_ancestor(node_id);
         }
-        if self.focus_node_id == Some(node_id) {
+        let focus_in_removed_subtree = self.focus_node_id.is_some_and(|focus_id| {
+            let mut curr = Some(focus_id);
+            while let Some(id) = curr {
+                if id == node_id {
+                    return true;
+                }
+                curr = self.get_node(id).and_then(|n| n.parent);
+            }
+            false
+        });
+        if let Some(focus_id) = self.focus_node_id.filter(|_| focus_in_removed_subtree) {
             let shell_provider = self.shell_provider.clone();
-            self.nodes[node_id].blur(shell_provider);
-            // Nothing on the chain contains the focus anymore. Only the surviving
-            // ancestors need a snapshot for restyling: nodes in the removed subtree had
-            // theirs dropped already and may be freed entirely.
-            let mut maybe_id = Some(node_id);
+            self.nodes[focus_id].blur(shell_provider);
+            let mut maybe_id = Some(focus_id);
             while let Some(node) = maybe_id.and_then(|id| self.get_node(id)) {
                 let id = node.id;
                 maybe_id = node.parent;
@@ -1098,6 +1105,7 @@ impl BaseDocument {
                 }
             }
             self.focus_node_id = None;
+            self.has_changes = true;
         }
         if self.mousedown_node_id == Some(node_id) {
             self.mousedown_node_id = None;
