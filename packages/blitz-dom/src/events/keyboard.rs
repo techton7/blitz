@@ -132,13 +132,14 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(DomEvent)>(
                         if !key_event.modifiers.contains(Modifiers::ALT) {
                             doc.click_count = 0;
                             doc.last_mousedown_time = None;
-                            let click = doc.nodes[node_id].synthetic_click_event(key_event.modifiers);
+                            let click =
+                                doc.nodes[node_id].synthetic_click_event(key_event.modifiers);
                             dispatch_event(DomEvent::new(node_id, click));
                         }
                     } else if doc.is_enter_non_link_activatable_element(node_id)
-                        && !key_event.modifiers.intersects(
-                            Modifiers::CONTROL | Modifiers::ALT | Modifiers::META,
-                        )
+                        && !key_event
+                            .modifiers
+                            .intersects(Modifiers::CONTROL | Modifiers::ALT | Modifiers::META)
                     {
                         doc.click_count = 0;
                         doc.last_mousedown_time = None;

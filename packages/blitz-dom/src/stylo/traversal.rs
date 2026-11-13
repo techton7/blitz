@@ -11,7 +11,6 @@ use crate::StyleThreading;
 use crate::document::QueuedAnimationEvent;
 use crate::node::Node;
 use style::animation::{AnimationState, KeyframesIterationState};
-use style_traits::values::ToCss as _;
 use style::global_style_data::STYLE_THREAD_POOL;
 use style::invalidation::element::restyle_hints::RestyleHint;
 use style::properties::ComputedValues;
@@ -31,6 +30,7 @@ use style::{
     traversal::{DomTraversal, recalc_style_at, resolve_style},
     traversal_flags::TraversalFlags,
 };
+use style_traits::values::ToCss as _;
 
 use super::dom::BlitzNode;
 
@@ -177,8 +177,7 @@ impl crate::document::BaseDocument {
                 if animation.state == AnimationState::Running {
                     let mut iterations_crossed = 0;
                     let mut last_iteration_elapsed = 0.0f32;
-                    while animation.duration > 0.0
-                        && animation.iterate_if_necessary(now_effective)
+                    while animation.duration > 0.0 && animation.iterate_if_necessary(now_effective)
                     {
                         iterations_crossed += 1;
                         let current_iteration = match animation.iteration_state {

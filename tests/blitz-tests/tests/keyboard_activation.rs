@@ -56,11 +56,7 @@ impl ShellProvider for RecordingShell {
         self.redraws.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn open_file_dialog(
-        &self,
-        _multiple: bool,
-        _filter: Option<FileDialogFilter>,
-    ) -> Vec<PathBuf> {
+    fn open_file_dialog(&self, _multiple: bool, _filter: Option<FileDialogFilter>) -> Vec<PathBuf> {
         self.file_dialogs.fetch_add(1, Ordering::SeqCst);
         self.files_to_return.lock().unwrap().clone()
     }
@@ -738,23 +734,43 @@ fn summary_first_child_enter_and_space() {
     let sum = sel(&doc, "#sum");
     doc.set_focus_to(sum);
 
-    assert!(!doc.get_node(det).unwrap().data.has_attr(local_name!("open")));
+    assert!(
+        !doc.get_node(det)
+            .unwrap()
+            .data
+            .has_attr(local_name!("open"))
+    );
 
     // Enter opens <details>
     press_enter(&mut doc, &mut h);
     assert_eq!(h.clicks_on(sum), 1);
-    assert!(doc.get_node(det).unwrap().data.has_attr(local_name!("open")));
+    assert!(
+        doc.get_node(det)
+            .unwrap()
+            .data
+            .has_attr(local_name!("open"))
+    );
 
     // Space closes <details>
     drive(&mut doc, &mut h, space_down());
     assert!(state_of(&doc, sum).contains(ElementState::ACTIVE));
-    assert!(doc.get_node(det).unwrap().data.has_attr(local_name!("open")));
+    assert!(
+        doc.get_node(det)
+            .unwrap()
+            .data
+            .has_attr(local_name!("open"))
+    );
 
     drive(&mut doc, &mut h, space_up());
     doc.resolve(0.0);
     assert!(!state_of(&doc, sum).contains(ElementState::ACTIVE));
     assert_eq!(h.clicks_on(sum), 2);
-    assert!(!doc.get_node(det).unwrap().data.has_attr(local_name!("open")));
+    assert!(
+        !doc.get_node(det)
+            .unwrap()
+            .data
+            .has_attr(local_name!("open"))
+    );
 }
 
 #[test]
@@ -780,7 +796,12 @@ fn non_interactive_anchor_and_secondary_summary_inert() {
         press_space(&mut doc, &mut h);
         assert_eq!(h.clicks_on(id), 0, "{selector} must not synthesize Click");
     }
-    assert!(doc.get_node(det).unwrap().data.has_attr(local_name!("open")));
+    assert!(
+        doc.get_node(det)
+            .unwrap()
+            .data
+            .has_attr(local_name!("open"))
+    );
     assert!(nav.take().is_empty());
 }
 
@@ -799,7 +820,11 @@ fn div_role_button_not_engine_activated() {
         doc.set_focus_to(id);
         press_enter(&mut doc, &mut h);
         press_space(&mut doc, &mut h);
-        assert_eq!(h.clicks_on(id), 0, "{selector} must not be engine-activated");
+        assert_eq!(
+            h.clicks_on(id),
+            0,
+            "{selector} must not be engine-activated"
+        );
     }
 }
 
@@ -962,7 +987,11 @@ fn enter_modifier_filtering() {
                 false,
             )),
         );
-        assert_eq!(h.clicks_on(btn), 0, "button must reject {blocked_mod:?}+Enter");
+        assert_eq!(
+            h.clicks_on(btn),
+            0,
+            "button must reject {blocked_mod:?}+Enter"
+        );
     }
 
     drive(
@@ -1031,7 +1060,12 @@ fn enter_auto_repeat_fires_once() {
     // Initial press opens details
     drive(&mut doc, &mut h, enter_down());
     assert_eq!(h.clicks_on(sum), 1);
-    assert!(doc.get_node(det).unwrap().data.has_attr(local_name!("open")));
+    assert!(
+        doc.get_node(det)
+            .unwrap()
+            .data
+            .has_attr(local_name!("open"))
+    );
 
     // Auto-repeating KeyDown(Enter) must NOT toggle back closed
     for _ in 0..3 {
@@ -1049,7 +1083,12 @@ fn enter_auto_repeat_fires_once() {
         );
     }
     assert_eq!(h.clicks_on(sum), 1);
-    assert!(doc.get_node(det).unwrap().data.has_attr(local_name!("open")));
+    assert!(
+        doc.get_node(det)
+            .unwrap()
+            .data
+            .has_attr(local_name!("open"))
+    );
 }
 
 #[test]
@@ -1298,7 +1337,8 @@ fn space_cancelled_when_disabled_or_removed_mid_hold() {
     doc.set_focus_to(b_self);
     drive(&mut doc, &mut h, space_down());
     assert!(state_of(&doc, b_self).contains(ElementState::ACTIVE));
-    doc.mutate().set_attribute(b_self, disabled_attr.clone(), "");
+    doc.mutate()
+        .set_attribute(b_self, disabled_attr.clone(), "");
     assert!(!state_of(&doc, b_self).contains(ElementState::ACTIVE));
     drive(&mut doc, &mut h, space_up());
     assert_eq!(h.clicks_on(b_self), 0);
@@ -1637,7 +1677,12 @@ fn area_href_case_insensitive_types_and_submit_defaults() {
             1,
             "{selector} must submit form once without also navigating parent <a href>"
         );
-        assert!(navs[0].url.as_str().starts_with("https://example.com/form_target"));
+        assert!(
+            navs[0]
+                .url
+                .as_str()
+                .starts_with("https://example.com/form_target")
+        );
     }
 }
 

@@ -867,9 +867,9 @@ impl ElementData {
 
     pub fn is_submit_input(&self) -> bool {
         self.name.local == local_name!("input")
-            && self
-                .attr(local_name!("type"))
-                .is_some_and(|t| t.eq_ignore_ascii_case("submit") || t.eq_ignore_ascii_case("image"))
+            && self.attr(local_name!("type")).is_some_and(|t| {
+                t.eq_ignore_ascii_case("submit") || t.eq_ignore_ascii_case("image")
+            })
     }
 
     pub(crate) fn is_checkbox_input(&self) -> bool {

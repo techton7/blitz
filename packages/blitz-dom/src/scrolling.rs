@@ -725,7 +725,8 @@ impl BaseDocument {
             let target_start_y = (node_abs.y - container_abs.y - container_border.top) as f64;
             let viewport_width = container.client_width() as f64;
             let viewport_height = container.client_height() as f64;
-            let (current, _min, max) = self.scroll_state(ScrollTarget::Node(target_container), false);
+            let (current, _min, max) =
+                self.scroll_state(ScrollTarget::Node(target_container), false);
             let (can_scroll_x, can_scroll_y) = container
                 .primary_styles()
                 .map(|styles| {

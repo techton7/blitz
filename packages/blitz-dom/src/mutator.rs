@@ -1572,9 +1572,7 @@ impl<'doc> DocumentMutator<'doc> {
 
         // Add content of "value" attribute as a text node child if:
         //   - Tag name is input and type is button/submit/reset
-        if is_button_input
-            && let Some(value) = value
-        {
+        if is_button_input && let Some(value) = value {
             let id = self.create_text_node(&value);
             self.append_children(target_id, &[id]);
             return;

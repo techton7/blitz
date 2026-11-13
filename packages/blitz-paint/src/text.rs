@@ -410,12 +410,8 @@ fn draw_glyph_run_hybrid(
             };
 
             if let Some(image_data) = maybe_image {
-                let (placement_transform, _bounds) = compute_bitmap_placement_transform(
-                    glyph.x,
-                    glyph.y,
-                    font_size,
-                    &raster_glyph,
-                );
+                let (placement_transform, _bounds) =
+                    compute_bitmap_placement_transform(glyph.x, glyph.y, font_size, &raster_glyph);
                 let glyph_transform = transform * placement_transform;
                 scene.draw_image((&image_data).into(), glyph_transform);
             }

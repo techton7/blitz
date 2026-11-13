@@ -214,7 +214,13 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
     let y = event.page_y();
     let buttons = event.buttons;
 
-    let mut changed = doc.set_hover_to(x, y);
+    let is_captured = doc.active_capture_node(event.id).is_some();
+    let explicit_capture = doc.has_explicit_pointer_capture(event.id);
+    let mut changed = if is_captured {
+        false
+    } else {
+        doc.set_hover_to(x, y)
+    };
 
     // Check if we've moved enough to be considered a selection drag (2px threshold)
     if buttons != MouseEventButtons::None && doc.drag_mode == DragMode::None {
@@ -223,8 +229,10 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
         if dx.abs() > 2.0 || dy.abs() > 2.0 {
             match event.id {
                 BlitzPointerId::Mouse | BlitzPointerId::Pen => {
-                    if let Some(mousedown_node_id) = doc.mousedown_node_id {
-                        let node = &doc.nodes[mousedown_node_id];
+                    if !explicit_capture
+                        && let Some(mousedown_node_id) = doc.mousedown_node_id
+                        && let Some(node) = doc.nodes.get(mousedown_node_id)
+                    {
                         if let Some(style) = node.primary_styles() {
                             let user_select = style.clone_user_select();
                             if user_select == UserSelect::None {
@@ -567,17 +575,21 @@ pub(crate) fn handle_pointerdown(
 pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
     doc: &mut BaseDocument,
     target: NodeId,
+    click_target: Option<NodeId>,
     event: &BlitzPointerEvent,
     mut dispatch_event: F,
 ) {
     if doc.devtools().highlight_hover {
-        let mut node = doc.get_node(target).unwrap();
-        if event.button == MouseEventButton::Secondary {
-            if let Some(parent_id) = node.layout_parent.get() {
-                node = doc.get_node(parent_id).unwrap();
+        if let Some(mut node) = doc.get_node(target) {
+            if event.button == MouseEventButton::Secondary {
+                if let Some(parent_id) = node.layout_parent.get()
+                    && let Some(parent_node) = doc.get_node(parent_id)
+                {
+                    node = parent_node;
+                }
             }
+            doc.debug_log_node(node.id);
         }
-        doc.debug_log_node(node.id);
         doc.devtools_mut().highlight_hover = false;
         return;
     }
@@ -586,9 +598,7 @@ pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
     // locally for use within this function
     let drag_mode = doc.drag_mode.take();
 
-    // Don't dispatch click if we were doing a text selection drag or panning
-    // the document with a touch
-    let do_click = drag_mode == DragMode::None;
+    let do_click = !matches!(drag_mode, DragMode::Panning(_) | DragMode::ScrollbarDrag(_));
 
     // Repaint so a dragged scrollbar thumb drops its active styling, and
     // restart its fade-out delay now that the drag no longer holds it shown
@@ -609,18 +619,27 @@ pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
         }
     }
 
+    let Some(click_target) =
+        click_target.filter(|&id| doc.nodes.get(id).is_some_and(|n| n.flags.is_in_document()))
+    else {
+        return;
+    };
+
     // Dispatch a click event
     if do_click && event.button == MouseEventButton::Main {
         if event.is_finger() {
-            update_focus_for_press(doc, target, &mut dispatch_event);
+            update_focus_for_press(doc, click_target, &mut dispatch_event);
         }
-        dispatch_event(DomEvent::new(target, DomEventData::Click(event.clone())));
+        dispatch_event(DomEvent::new(
+            click_target,
+            DomEventData::Click(event.clone()),
+        ));
     }
 
     // Dispatch a context menu event
     if do_click && event.button == MouseEventButton::Secondary {
         dispatch_event(DomEvent::new(
-            target,
+            click_target,
             DomEventData::ContextMenu(event.clone()),
         ));
     }
@@ -639,13 +658,10 @@ fn update_focus_for_press(
         if doc.is_form_control_disabled(node_id) {
             return;
         }
-        let is_non_controlling_summary = doc.nodes[node_id]
-            .element_data()
-            .is_some_and(|el| {
-                el.name.local == local_name!("summary")
-                    && el.attr_parsed::<i32>(local_name!("tabindex")).is_none()
-            })
-            && !doc.is_controlling_summary(node_id);
+        let is_non_controlling_summary = doc.nodes[node_id].element_data().is_some_and(|el| {
+            el.name.local == local_name!("summary")
+                && el.attr_parsed::<i32>(local_name!("tabindex")).is_none()
+        }) && !doc.is_controlling_summary(node_id);
         let node = &doc.nodes[node_id];
         if let Some(el) = node.element_data() {
             if !is_non_controlling_summary

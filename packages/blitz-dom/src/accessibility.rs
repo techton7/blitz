@@ -475,23 +475,40 @@ mod tests {
         // When visible, button is emitted as focus
         let tree_update = doc.build_accessibility_tree();
         assert_eq!(tree_update.focus, NodeId(button.as_u64()));
-        assert!(tree_update.nodes.iter().any(|(id, _)| *id == NodeId(button.as_u64())));
+        assert!(
+            tree_update
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == NodeId(button.as_u64()))
+        );
 
         // When container becomes visibility: hidden, button is omitted from nodes and focus is MAX
-        doc.mutate().set_attribute(container, qual_name!("class"), "hidden");
+        doc.mutate()
+            .set_attribute(container, qual_name!("class"), "hidden");
         doc.resolve(0.0);
 
         let tree_update_hidden = doc.build_accessibility_tree();
         assert_eq!(tree_update_hidden.focus, NodeId(u64::MAX));
-        assert!(!tree_update_hidden.nodes.iter().any(|(id, _)| *id == NodeId(button.as_u64())));
+        assert!(
+            !tree_update_hidden
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == NodeId(button.as_u64()))
+        );
 
         // When container becomes display: none, button is also omitted from nodes and focus is MAX
-        doc.mutate().set_attribute(container, qual_name!("class"), "none");
+        doc.mutate()
+            .set_attribute(container, qual_name!("class"), "none");
         doc.resolve(0.0);
 
         let tree_update_none = doc.build_accessibility_tree();
         assert_eq!(tree_update_none.focus, NodeId(u64::MAX));
-        assert!(!tree_update_none.nodes.iter().any(|(id, _)| *id == NodeId(button.as_u64())));
+        assert!(
+            !tree_update_none
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == NodeId(button.as_u64()))
+        );
     }
 
     #[test]
@@ -527,6 +544,11 @@ mod tests {
 
         let tree_update = doc.build_accessibility_tree();
         assert_eq!(tree_update.focus, NodeId(u64::MAX));
-        assert!(!tree_update.nodes.iter().any(|(id, _)| *id == NodeId(button.as_u64())));
+        assert!(
+            !tree_update
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == NodeId(button.as_u64()))
+        );
     }
 }

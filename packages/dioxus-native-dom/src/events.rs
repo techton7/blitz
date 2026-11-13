@@ -4,16 +4,17 @@ use blitz_dom::{
 };
 use blitz_traits::events::{
     BlitzAnimationEvent, BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, BlitzScrollEvent,
-    BlitzTransitionEvent, BlitzWheelDelta, BlitzWheelEvent, MouseEventButton,
+    BlitzTransitionEvent, BlitzWheelDelta, BlitzWheelEvent, MouseEventButton, PointerCaptureError,
 };
 use dioxus_html::{
-    AnimationData, BeforeInputData, CancelData, ClipboardData, CompositionData, DragData, FocusData,
-    FormData, FormValue, HasAnimationData, HasFileData, HasFocusData, HasFormData, HasKeyboardData,
-    HasMouseData, HasPointerData, HasScrollData, HasTouchData, HasTouchPointData, HasTransitionData,
-    HasWheelData, HtmlEventConverter, ImageData, KeyboardData, MediaData, MountedData, MountedError,
-    MountedResult, MouseData, PlatformEventData, PointerData, RenderedElementBacking, ResizeData,
-    ScrollBehavior, ScrollData, ScrollLogicalPosition, ScrollToOptions, SelectionData, ToggleData,
-    TouchData, TouchPoint, TransitionData, VisibleData, WheelData,
+    AnimationData, BeforeInputData, CancelData, ClipboardData, CompositionData, DragData,
+    FocusData, FormData, FormValue, HasAnimationData, HasFileData, HasFocusData, HasFormData,
+    HasKeyboardData, HasMouseData, HasPointerData, HasScrollData, HasTouchData, HasTouchPointData,
+    HasTransitionData, HasWheelData, HtmlEventConverter, ImageData, KeyboardData, MediaData,
+    MountedData, MountedError, MountedResult, MouseData, PlatformEventData, PointerData,
+    RenderedElementBacking, ResizeData, ScrollBehavior, ScrollData, ScrollLogicalPosition,
+    ScrollToOptions, SelectionData, ToggleData, TouchData, TouchPoint, TransitionData, VisibleData,
+    WheelData,
     geometry::{
         ClientPoint, ElementPoint, PagePoint, PixelsRect, PixelsSize, PixelsVector2D, ScreenPoint,
         WheelDelta,
@@ -31,7 +32,7 @@ use std::{
     fmt::Display,
     future::Future,
     pin::Pin,
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 use crate::NodeId;
@@ -159,6 +160,28 @@ pub struct NodeHandle {
 impl NodeHandle {
     pub fn node_id(&self) -> NodeId {
         self.node_id
+    }
+
+    pub fn base_document(&self) -> Rc<RefCell<BaseDocument>> {
+        Rc::clone(&self.doc)
+    }
+
+    pub fn set_pointer_capture(&self, pointer_id: i32) -> Result<(), PointerCaptureError> {
+        self.doc
+            .borrow_mut()
+            .set_pointer_capture(self.node_id, pointer_id)
+    }
+
+    pub fn release_pointer_capture(&self, pointer_id: i32) -> Result<(), PointerCaptureError> {
+        self.doc
+            .borrow_mut()
+            .release_pointer_capture(self.node_id, pointer_id)
+    }
+
+    pub fn has_pointer_capture(&self, pointer_id: i32) -> bool {
+        self.doc
+            .borrow()
+            .has_pointer_capture(self.node_id, pointer_id)
     }
 
     pub fn doc(&self) -> Ref<'_, BaseDocument> {
@@ -411,37 +434,72 @@ impl HasKeyboardData for BlitzKeyboardData {
 }
 
 #[derive(Clone)]
-pub struct NativePointerData(pub(crate) BlitzPointerEvent);
+pub struct NativePointerData {
+    pub(crate) event: BlitzPointerEvent,
+    pub(crate) target: Option<(Weak<RefCell<BaseDocument>>, NodeId)>,
+}
+
+impl NativePointerData {
+    pub fn new(event: BlitzPointerEvent) -> Self {
+        Self {
+            event,
+            target: None,
+        }
+    }
+
+    pub fn with_target(
+        event: BlitzPointerEvent,
+        doc: Weak<RefCell<BaseDocument>>,
+        target: NodeId,
+    ) -> Self {
+        Self {
+            event,
+            target: Some((doc, target)),
+        }
+    }
+
+    pub fn inner(&self) -> &BlitzPointerEvent {
+        &self.event
+    }
+
+    pub fn target_node_handle(&self) -> Option<NodeHandle> {
+        let (doc, node_id) = self.target.as_ref()?;
+        Some(NodeHandle {
+            doc: doc.upgrade()?,
+            node_id: *node_id,
+        })
+    }
+}
 
 impl InteractionLocation for NativePointerData {
     fn client_coordinates(&self) -> ClientPoint {
-        ClientPoint::new(self.0.client_x() as f64, self.0.client_y() as f64)
+        ClientPoint::new(self.event.client_x() as f64, self.event.client_y() as f64)
     }
 
     fn screen_coordinates(&self) -> ScreenPoint {
-        ScreenPoint::new(self.0.screen_x() as f64, self.0.screen_y() as f64)
+        ScreenPoint::new(self.event.screen_x() as f64, self.event.screen_y() as f64)
     }
 
     fn page_coordinates(&self) -> PagePoint {
-        PagePoint::new(self.0.page_x() as f64, self.0.page_y() as f64)
+        PagePoint::new(self.event.page_x() as f64, self.event.page_y() as f64)
     }
 }
 
 impl InteractionElementOffset for NativePointerData {
     fn element_coordinates(&self) -> ElementPoint {
-        ElementPoint::new(self.0.element_x() as f64, self.0.element_y() as f64)
+        ElementPoint::new(self.event.element_x() as f64, self.event.element_y() as f64)
     }
 }
 
 impl ModifiersInteraction for NativePointerData {
     fn modifiers(&self) -> Modifiers {
-        self.0.mods
+        self.event.mods
     }
 }
 
 impl PointerInteraction for NativePointerData {
     fn trigger_button(&self) -> Option<MouseButton> {
-        Some(match self.0.button {
+        Some(match self.event.button {
             MouseEventButton::Main => MouseButton::Primary,
             MouseEventButton::Auxiliary => MouseButton::Auxiliary,
             MouseEventButton::Secondary => MouseButton::Secondary,
@@ -451,7 +509,7 @@ impl PointerInteraction for NativePointerData {
     }
 
     fn held_buttons(&self) -> MouseButtonSet {
-        dioxus_html::input_data::decode_mouse_button_set(self.0.buttons.bits() as u16)
+        dioxus_html::input_data::decode_mouse_button_set(self.event.buttons.bits() as u16)
     }
 }
 impl HasMouseData for NativePointerData {
@@ -466,19 +524,15 @@ impl HasPointerData for NativePointerData {
     }
 
     fn is_primary(&self) -> bool {
-        self.0.is_primary
+        self.event.is_primary
     }
 
     fn pointer_id(&self) -> i32 {
-        match self.0.id {
-            BlitzPointerId::Mouse => 0,
-            BlitzPointerId::Pen => 0,
-            BlitzPointerId::Finger(id) => id as i32,
-        }
+        self.event.id.to_dom_pointer_id()
     }
 
     fn pointer_type(&self) -> String {
-        match self.0.id {
+        match self.event.id {
             BlitzPointerId::Mouse => String::from("mouse"),
             BlitzPointerId::Pen => String::from("pen"),
             BlitzPointerId::Finger(_) => String::from("touch"),
@@ -486,19 +540,19 @@ impl HasPointerData for NativePointerData {
     }
 
     fn pressure(&self) -> f32 {
-        self.0.details.pressure as f32
+        self.event.details.pressure as f32
     }
     fn tangential_pressure(&self) -> f32 {
-        self.0.details.tangential_pressure
+        self.event.details.tangential_pressure
     }
     fn tilt_x(&self) -> i32 {
-        self.0.details.tilt_x as i32
+        self.event.details.tilt_x as i32
     }
     fn tilt_y(&self) -> i32 {
-        self.0.details.tilt_y as i32
+        self.event.details.tilt_y as i32
     }
     fn twist(&self) -> i32 {
-        self.0.details.twist as i32
+        self.event.details.twist as i32
     }
 
     // TODO: implement these fields with real values
@@ -571,10 +625,7 @@ impl InteractionLocation for NativeTouchPointData {
 
 impl HasTouchPointData for NativeTouchPointData {
     fn identifier(&self) -> i32 {
-        match self.0.id {
-            BlitzPointerId::Finger(id) => id as i32,
-            BlitzPointerId::Mouse | BlitzPointerId::Pen => 0,
-        }
+        self.0.id.to_dom_pointer_id()
     }
 
     fn force(&self) -> f64 {
@@ -740,7 +791,7 @@ impl HasTransitionData for NativeTransitionData {
 }
 
 pub fn synthetic_click_event(node: &Node, modifiers: Modifiers) -> Box<dyn Any> {
-    Box::new(NativePointerData(
+    Box::new(NativePointerData::new(
         node.synthetic_click_event_data(modifiers),
     ))
 }
@@ -865,7 +916,10 @@ mod tests {
 
         // Once mutable borrow is released, get_client_rect should succeed
         let ok_res = block_on(async { handle.get_client_rect().await });
-        assert!(ok_res.is_ok(), "Expected Ok after guard drop, got {ok_res:?}");
+        assert!(
+            ok_res.is_ok(),
+            "Expected Ok after guard drop, got {ok_res:?}"
+        );
     }
 
     #[test]
@@ -896,6 +950,26 @@ mod tests {
         drop(_guard);
 
         let ok_res = block_on(async { handle.set_focus(false).await });
-        assert!(ok_res.is_ok(), "Expected Ok(()) after guard drop, got {ok_res:?}");
+        assert!(
+            ok_res.is_ok(),
+            "Expected Ok(()) after guard drop, got {ok_res:?}"
+        );
+    }
+
+    #[test]
+    fn pointer_and_touch_ids_are_disjoint() {
+        let mut mouse = finger_event(0, 0.0, 0.0);
+        mouse.id = BlitzPointerId::Mouse;
+        let mut pen = finger_event(0, 0.0, 0.0);
+        pen.id = BlitzPointerId::Pen;
+        let f0 = finger_event(0, 0.0, 0.0);
+        let f1 = finger_event(1, 0.0, 0.0);
+
+        assert_eq!(NativePointerData::new(mouse).pointer_id(), 1);
+        assert_eq!(NativePointerData::new(pen).pointer_id(), 2);
+        assert_eq!(NativePointerData::new(f0.clone()).pointer_id(), 3);
+        assert_eq!(NativePointerData::new(f1.clone()).pointer_id(), 4);
+        assert_eq!(NativeTouchPointData(f0).identifier(), 3);
+        assert_eq!(NativeTouchPointData(f1).identifier(), 4);
     }
 }
