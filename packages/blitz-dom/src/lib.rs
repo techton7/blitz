@@ -95,8 +95,8 @@ pub use blitz_traits::node_id::NodeId;
 // `Node::final_layout`)
 pub use config::{DocumentConfig, StyleThreading};
 pub use document::{
-    BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, EventCaptureHook, FocusSource,
-    PlainDocument, QueuedAnimationEvent,
+    BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, EventCaptureHook, FocusOptions,
+    FocusSource, PlainDocument, QueuedAnimationEvent,
 };
 pub use markup5ever::{
     LocalName, Namespace, NamespaceStaticSet, Prefix, PrefixStaticSet, QualName, local_name,

@@ -761,7 +761,11 @@ impl Node {
             .is_some_and(|data| data.element_state.contains(ElementState::FOCUS_WITHIN))
     }
 
-    pub fn focus(&mut self, shell_provider: Arc<dyn ShellProvider>, focus_visible: bool) {
+    pub fn focus(&mut self, shell_provider: Arc<dyn ShellProvider>) {
+        self.set_focused(shell_provider, true);
+    }
+
+    pub fn set_focused(&mut self, shell_provider: Arc<dyn ShellProvider>, focus_visible: bool) {
         if let Some(data) = self.element_data_mut() {
             data.element_state.insert(ElementState::FOCUS);
             data.element_state
@@ -805,6 +809,11 @@ impl Node {
     pub fn is_focussed(&self) -> bool {
         self.element_data()
             .is_some_and(|data| data.element_state.contains(ElementState::FOCUS))
+    }
+
+    pub fn is_focus_visible(&self) -> bool {
+        self.element_data()
+            .is_some_and(|data| data.element_state.contains(ElementState::FOCUSRING))
     }
 
     pub fn active(&mut self) {

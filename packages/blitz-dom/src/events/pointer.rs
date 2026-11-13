@@ -17,8 +17,7 @@ use style_dom::ElementState;
 use taffy::AbsoluteAxis;
 
 use crate::{
-    BaseDocument,
-    document::FocusSource,
+    BaseDocument, FocusSource,
     node::{ScrollbarRef, SpecialElementData},
     scrolling::{FlingState, ScrollAnimationState},
 };
@@ -561,13 +560,15 @@ pub(crate) fn handle_pointerdown(
                 drop(font_ctx);
             }
 
-            generate_focus_events(
-                doc,
-                &mut |doc| {
-                    doc.set_focus_to_with_source(hit.node_id, FocusSource::Pointer);
-                },
-                dispatch_event,
-            );
+            if moves_focus {
+                generate_focus_events(
+                    doc,
+                    &mut |doc| {
+                        doc.set_focus_to_with_source(hit.node_id, FocusSource::Pointer);
+                    },
+                    dispatch_event,
+                );
+            }
         }
     }
 }
@@ -794,9 +795,7 @@ pub(crate) fn handle_click(
                         let target_node = doc.get_node_mut(target_node_id).unwrap();
                         let syn_event = target_node.synthetic_click_event_data(event.mods);
                         handle_click(doc, target_node_id, &syn_event, dispatch_event);
-                        if !doc.is_form_control_disabled(target_node_id)
-                            && doc.focus_node_id != Some(target_node_id)
-                        {
+                        if !doc.is_form_control_disabled(target_node_id) {
                             generate_focus_events(
                                 doc,
                                 &mut |doc| {

@@ -668,6 +668,45 @@ impl ElementData {
         }
     }
 
+    pub(crate) fn contenteditable_attr(&self) -> Option<bool> {
+        let value = self.attr(local_name!("contenteditable"))?;
+        if value.is_empty()
+            || value.eq_ignore_ascii_case("true")
+            || value.eq_ignore_ascii_case("plaintext-only")
+        {
+            Some(true)
+        } else if value.eq_ignore_ascii_case("false") {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    pub fn always_triggers_focus_visible(&self) -> bool {
+        if self.name.local == local_name!("textarea") {
+            return true;
+        }
+        if self.name.local == local_name!("input") {
+            let Some(ty) = self.attr(local_name!("type")) else {
+                return true;
+            };
+            return !matches!(
+                ty.to_ascii_lowercase().as_str(),
+                "button"
+                    | "submit"
+                    | "reset"
+                    | "image"
+                    | "checkbox"
+                    | "radio"
+                    | "file"
+                    | "range"
+                    | "color"
+                    | "hidden"
+            );
+        }
+        self.contenteditable_attr() == Some(true)
+    }
+
     pub fn flush_is_focussable(&mut self) {
         // disabled is a boolean attribute: its presence is what counts, on elements
         // that support being disabled (HTML §4.10.18.5). Non-disableable elements
@@ -685,14 +724,18 @@ impl ElementData {
                         // These elements are:
                         //   - <a> or <area> with href attribute
                         //   - <button>, <frame>, <iframe>, <input> (except type="hidden"), <object>, <select>, <textarea>, and SVG <a> element
-                        //   - <summary> element that provides summary for a <details> element.
+                        //   - <summary> element that provides summary for a <details> element
+                        //   - [contenteditable] editing hosts
 
-                        if [local_name!("a"), local_name!("area")].contains(&self.name.local) {
+                        if self.contenteditable_attr() == Some(true) {
+                            true
+                        } else if [local_name!("a"), local_name!("area")].contains(&self.name.local)
+                        {
                             self.attr(local_name!("href")).is_some()
                         } else if self.name.local == local_name!("input") {
                             !self
                                 .attr(local_name!("type"))
-                                .is_some_and(|t| t.eq_ignore_ascii_case("hidden"))
+                                .is_some_and(|ty| ty.eq_ignore_ascii_case("hidden"))
                         } else {
                             const DEFAULT_FOCUSSABLE_ELEMENTS: [LocalName; 6] = [
                                 local_name!("button"),

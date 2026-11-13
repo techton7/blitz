@@ -13,7 +13,7 @@ use keyboard::{KeyboardOrTextInputEvent, handle_key_or_input_event, handle_keyup
 pub(crate) use pointer::DragMode;
 use pointer::{handle_click, handle_pointerdown, handle_pointermove, handle_pointerup};
 
-use crate::{BaseDocument, document::FocusSource, events::pointer::handle_wheel};
+use crate::{BaseDocument, FocusSource, events::pointer::handle_wheel};
 
 fn adjust_coords_for_subdocument(
     coords: &mut PointerCoords,

@@ -1465,15 +1465,40 @@ fn disabled_button_input_inert_anchor_ignores_disabled() {
     // Tab skips disabled button and disabled input, landing directly on <a href disabled>
     assert_eq!(doc.focus_next_node(), Some(alink));
 
-    // Even if focus is forced onto disabled controls, Enter/Space/pointer click are inert
-    doc.set_focus_to(dbtn);
+    // Disabled controls reject programmatic focus (`set_focus_to` returns false)
+    // and ignore Enter/Space activation even if KeyDown/KeyUp events target them directly.
+    doc.clear_focus();
+    assert!(!doc.set_focus_to(dbtn));
     press_enter(&mut doc, &mut h);
     press_space(&mut doc, &mut h);
+    for ev in [enter_down(), space_down(), space_up()] {
+        let (UiEvent::KeyDown(kd) | UiEvent::KeyUp(kd)) = ev else {
+            unreachable!()
+        };
+        let data = if kd.state == KeyState::Pressed {
+            DomEventData::KeyDown(kd)
+        } else {
+            DomEventData::KeyUp(kd)
+        };
+        EventDriver::new(&mut doc, &mut h).handle_dom_event(DomEvent::new(dbtn, data));
+    }
     assert_eq!(h.clicks_on(dbtn), 0);
 
-    doc.set_focus_to(dinp);
+    doc.clear_focus();
+    assert!(!doc.set_focus_to(dinp));
     press_enter(&mut doc, &mut h);
     press_space(&mut doc, &mut h);
+    for ev in [enter_down(), space_down(), space_up()] {
+        let (UiEvent::KeyDown(kd) | UiEvent::KeyUp(kd)) = ev else {
+            unreachable!()
+        };
+        let data = if kd.state == KeyState::Pressed {
+            DomEventData::KeyDown(kd)
+        } else {
+            DomEventData::KeyUp(kd)
+        };
+        EventDriver::new(&mut doc, &mut h).handle_dom_event(DomEvent::new(dinp, data));
+    }
     assert_eq!(h.clicks_on(dinp), 0);
     assert!(nav.take().is_empty());
 

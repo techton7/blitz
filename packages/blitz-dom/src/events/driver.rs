@@ -653,11 +653,13 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                 if data.key == keyboard_types::Key::Named(keyboard_types::NamedKey::Escape) {
                     self.doc.inner_mut().clear_keyboard_active_node();
                 }
+                self.doc.inner_mut().note_keydown_modality(&data);
                 if let Some(target) = self.resolve_target_or_root(focussed_node_id) {
                     self.handle_dom_event(DomEvent::new(target, DomEventData::KeyDown(data)));
                 }
             }
             UiEvent::Ime(data) => {
+                self.doc.inner_mut().note_ime_modality(&data);
                 if let Some(target) = self.resolve_target_or_root(focussed_node_id) {
                     self.handle_dom_event(DomEvent::new(target, DomEventData::Ime(data)));
                 }

@@ -27,6 +27,7 @@ mod effect_layer_decorations;
 mod fixed_position;
 mod flex_grid_order;
 mod focus_redraw;
+mod focus_visible;
 mod focus_within;
 mod focusability_updates;
 mod font_element_attributes;

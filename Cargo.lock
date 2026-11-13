@@ -1906,15 +1906,19 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 [[package]]
 name = "const-serialize"
 version = "0.8.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbcbf0b1e0a27c1c972a6dcb8b8ab6e6cde0cd137f87b695baf147ec622f4d7"
 dependencies = [
  "const-serialize-macro",
- "dioxus-const-vec 0.8.0-alpha.3",
+ "dioxus-const-vec",
  "serde",
 ]
 
 [[package]]
 name = "const-serialize-macro"
 version = "0.8.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7d372d7ea4c50890f188c72a08782d5c98bc8c7cc9dc4343b61d8ba8e20c26b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2434,7 +2438,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a20d22ba8ac0eb0267459cfe6dcd3fd57158c37497ef422ba1940c34c5b04524"
 dependencies = [
  "dioxus-asset-resolver",
- "dioxus-cli-config 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-cli-config",
  "dioxus-config-macro",
  "dioxus-config-macros",
  "dioxus-core",
@@ -2456,12 +2460,13 @@ dependencies = [
 [[package]]
 name = "dioxus-asset-resolver"
 version = "0.8.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3405f8b33c91ddb71cd21c103cec7dde122d3c3e81702f59fa54241c996e9ad8"
 dependencies = [
- "dioxus-cli-config 0.8.0-alpha.3",
+ "dioxus-cli-config",
  "http",
  "infer",
  "jni 0.21.1",
- "manganis-core",
  "ndk",
  "ndk-context",
  "ndk-sys",
@@ -2469,10 +2474,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
 ]
-
-[[package]]
-name = "dioxus-cli-config"
-version = "0.8.0-alpha.3"
 
 [[package]]
 name = "dioxus-cli-config"
@@ -2498,10 +2499,6 @@ checksum = "84024d6dfd2ed560c84d874c57435f829daad9edbca907838581e541bebf1224"
 [[package]]
 name = "dioxus-const-vec"
 version = "0.8.0-alpha.3"
-
-[[package]]
-name = "dioxus-const-vec"
-version = "0.8.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09d24d174a15ddf07d157f4644d2f6417f66278d1b90b9aeb45f73d86cbdc157"
 
@@ -2513,10 +2510,10 @@ checksum = "44545e820910646b5ea476f913892dfc0302c146d1a8481f7fca75d80b8c6b41"
 dependencies = [
  "anyhow",
  "const_format",
- "dioxus-const-vec 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-const-vec",
  "dioxus-core-macro",
  "dioxus-core-template",
- "dioxus-core-types 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-core-types",
  "futures-channel",
  "futures-util",
  "generational-box",
@@ -2550,14 +2547,10 @@ version = "0.8.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b111b4b1656abff7b086fc4aee6f1c2fb62473a01a5dba5a94c2024e8640e1c"
 dependencies = [
- "dioxus-const-vec 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-const-vec",
  "serde",
  "xxhash-rust",
 ]
-
-[[package]]
-name = "dioxus-core-types"
-version = "0.8.0-alpha.3"
 
 [[package]]
 name = "dioxus-core-types"
@@ -2571,7 +2564,7 @@ version = "0.8.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32b67657014210bdf813a5d84618d5e93467be37528bbbfbf571b44f8985c7a8"
 dependencies = [
- "dioxus-cli-config 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-cli-config",
  "dioxus-core",
  "dioxus-devtools-types",
  "dioxus-signals",
@@ -2602,7 +2595,7 @@ checksum = "977047888cad56804a70fc89ae59c5e19c112507b18979b48757524bfac2ed73"
 dependencies = [
  "dioxus-core",
  "dioxus-core-macro",
- "dioxus-core-types 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-core-types",
  "dioxus-html",
  "futures-channel",
  "futures-util",
@@ -2649,7 +2642,7 @@ dependencies = [
  "bytes",
  "dioxus-core",
  "dioxus-core-macro",
- "dioxus-core-types 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-core-types",
  "dioxus-hooks",
  "dioxus-html-internal-macro",
  "enumset",
@@ -2700,7 +2693,7 @@ version = "0.8.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "87a8f6fb8cd04e5ca1e50bb832d318609a8ba6f693b784e56e2035b3432696a7"
 dependencies = [
- "dioxus-cli-config 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-cli-config",
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",
@@ -2724,7 +2717,7 @@ dependencies = [
  "blitz-traits",
  "cfg-if",
  "dioxus-asset-resolver",
- "dioxus-cli-config 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-cli-config",
  "dioxus-core",
  "dioxus-core-macro",
  "dioxus-devtools",
@@ -2822,9 +2815,9 @@ version = "0.8.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89961a6bab7429d847dc991ba81d3d9b78642a5631a294c197d1e066c2f77c24"
 dependencies = [
- "dioxus-cli-config 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-cli-config",
  "dioxus-core",
- "dioxus-core-types 0.8.0-alpha.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dioxus-core-types",
  "dioxus-devtools",
  "dioxus-document",
  "dioxus-history",
@@ -5111,6 +5104,8 @@ dependencies = [
 [[package]]
 name = "manganis"
 version = "0.8.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fffb546e2a2a088fa2837f35a2bb18ae6f2d364588b88c28922ddc5a5d0a29c6"
 dependencies = [
  "const-serialize",
  "jni 0.21.1",
@@ -5124,10 +5119,12 @@ dependencies = [
 [[package]]
 name = "manganis-core"
 version = "0.8.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9340430f394310902429a33e4f7d6adda071271ec6aa469c268df68fad2e6b4f"
 dependencies = [
  "const-serialize",
- "dioxus-cli-config 0.8.0-alpha.3",
- "dioxus-core-types 0.8.0-alpha.3",
+ "dioxus-cli-config",
+ "dioxus-core-types",
  "serde",
  "winnow 0.7.15",
 ]
@@ -5135,6 +5132,8 @@ dependencies = [
 [[package]]
 name = "manganis-macro"
 version = "0.8.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c2303c03afb221531c6f8c8ae01a081be83e3e29b8382dc4c17f18913bbba45"
 dependencies = [
  "dunce",
  "macro-string",
@@ -11267,27 +11266,3 @@ dependencies = [
  "syn 3.0.6",
  "winnow 1.0.4",
 ]
-
-[[patch.unused]]
-name = "blitz-host"
-version = "0.3.0"
-
-[[patch.unused]]
-name = "blitz-host-bridge"
-version = "0.3.0"
-
-[[patch.unused]]
-name = "blitz-host-protocol"
-version = "0.3.0"
-
-[[patch.unused]]
-name = "blitz-host-transport"
-version = "0.3.0"
-
-[[patch.unused]]
-name = "oxidase"
-version = "0.4.0"
-
-[[patch.unused]]
-name = "oxidase-floating-ui"
-version = "0.4.0"
