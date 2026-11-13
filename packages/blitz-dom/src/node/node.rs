@@ -1092,6 +1092,15 @@ impl Node {
         matches!(self.data, NodeData::Element { .. })
     }
 
+    /// Whether this is the document's root element (`<html>`). Its containing block is the
+    /// document node, so `containing_block().is_none()` does not tell it apart.
+    pub fn is_root_element(&self) -> bool {
+        self.is_element()
+            && self
+                .parent
+                .is_some_and(|parent| matches!(self.with(parent).data, NodeData::Document(_)))
+    }
+
     pub fn is_anonymous(&self) -> bool {
         matches!(self.data, NodeData::AnonymousBlock { .. })
     }
@@ -1622,7 +1631,7 @@ impl Node {
                 // against the viewport and do not scroll with it. (A fixed box
                 // whose containing block is a transformed ancestor scrolls with
                 // that ancestor like any other out-of-flow box.)
-                if child_position == taffy::Position::Fixed && self.containing_block().is_none() {
+                if child_position == taffy::Position::Fixed && self.is_root_element() {
                     child_x -= self.scroll_offset().x as f32;
                     child_y -= self.scroll_offset().y as f32;
                     let viewport_scroll = self.tree().viewport_scroll();
@@ -1791,12 +1800,22 @@ impl Node {
 
     /// Computes the Document-relative coordinates of the `Node`
     pub fn absolute_position(&self, x: f32, y: f32) -> crate::util::Point<f32> {
-        let x = x + self.final_layout().location.x - self.scroll_offset().x as f32;
-        let y = y + self.final_layout().location.y - self.scroll_offset().y as f32;
+        let mut x = x + self.final_layout().location.x - self.scroll_offset().x as f32;
+        let mut y = y + self.final_layout().location.y - self.scroll_offset().y as f32;
+
+        let cb = self.containing_block().map(|i| self.with(i));
+        if self.taffy_position() == taffy::Position::Fixed
+            && let Some(cb) = cb
+            && cb.is_root_element()
+        {
+            let scroll_offset = *cb.scroll_offset();
+            let viewport_scroll = self.tree().viewport_scroll();
+            x += scroll_offset.x as f32 + viewport_scroll.x as f32;
+            y += scroll_offset.y as f32 + viewport_scroll.y as f32;
+        }
 
         // Recurse up the positioning hierarchy
-        self.containing_block()
-            .map(|i| self.with(i).absolute_position(x, y))
+        cb.map(|cb| cb.absolute_position(x, y))
             .unwrap_or(crate::util::Point { x, y })
     }
 
@@ -2262,6 +2281,104 @@ mod test {
         assert!(
             node.element_state().contains(ElementState::ENABLED),
             "Button should be enabled by default"
+        );
+    }
+
+    #[test]
+    fn test_is_root_element() {
+        let mut document = BaseDocument::new(DocumentConfig::default());
+        let root_id = document.root_node().id;
+
+        // Document node itself is not an element -> false
+        let root_node = document.get_node(root_id).unwrap();
+        assert!(
+            !root_node.is_root_element(),
+            "Document node itself must not be root element"
+        );
+
+        let mut mutator = document.mutate();
+        let html_id = mutator.create_element(qual_name!("html"), vec![]);
+        let body_id = mutator.create_element(qual_name!("body"), vec![]);
+        let div_id = mutator.create_element(qual_name!("div"), vec![]);
+        let text_id = mutator.create_text_node("hello text");
+        let doc_text_id = mutator.create_text_node("doctype or raw text");
+        let detached_id = mutator.create_element(qual_name!("div"), vec![]);
+
+        mutator.append_children(div_id, &[text_id]);
+        mutator.append_children(body_id, &[div_id]);
+        mutator.append_children(html_id, &[body_id]);
+        mutator.append_children(root_id, &[html_id, doc_text_id]);
+        drop(mutator);
+
+        // 1. html has Document as parent and is an Element -> true
+        let html_node = document.get_node(html_id).unwrap();
+        assert!(
+            html_node.is_root_element(),
+            "<html> node whose parent is Document must return true"
+        );
+
+        // 2. body has html as parent -> false
+        let body_node = document.get_node(body_id).unwrap();
+        assert!(
+            !body_node.is_root_element(),
+            "<body> node must return false"
+        );
+
+        // 3. div is a regular child element -> false
+        let div_node = document.get_node(div_id).unwrap();
+        assert!(
+            !div_node.is_root_element(),
+            "Regular child element <div> must return false"
+        );
+
+        // 4. text node inside regular element -> false
+        let text_node = document.get_node(text_id).unwrap();
+        assert!(
+            !text_node.is_root_element(),
+            "Text node inside element must return false"
+        );
+
+        // 5. text node whose parent is Document -> false
+        let doc_text_node = document.get_node(doc_text_id).unwrap();
+        assert!(
+            !doc_text_node.is_root_element(),
+            "Text node directly under Document must return false"
+        );
+
+        // 6. Detached element with no parent -> false
+        let detached_node = document.get_node(detached_id).unwrap();
+        assert!(
+            !detached_node.is_root_element(),
+            "Detached element must return false"
+        );
+
+        // 7. Verify predicate remains consistent after layout resolve
+        document.resolve(0.0);
+
+        let html_node = document.get_node(html_id).unwrap();
+        assert!(
+            html_node.is_root_element(),
+            "<html> must return true after layout resolution"
+        );
+        let body_node = document.get_node(body_id).unwrap();
+        assert!(
+            !body_node.is_root_element(),
+            "<body> must return false after layout resolution"
+        );
+        let div_node = document.get_node(div_id).unwrap();
+        assert!(
+            !div_node.is_root_element(),
+            "<div> must return false after layout resolution"
+        );
+        let text_node = document.get_node(text_id).unwrap();
+        assert!(
+            !text_node.is_root_element(),
+            "Text node must return false after layout resolution"
+        );
+        let root_node = document.get_node(root_id).unwrap();
+        assert!(
+            !root_node.is_root_element(),
+            "Document node itself must return false after layout resolution"
         );
     }
 }

@@ -547,8 +547,18 @@ impl BaseDocument {
             let node = &self.nodes[id];
             pos.x += node.unrounded_layout().location.x - node.scroll_offset().x as f32;
             pos.y += node.unrounded_layout().location.y - node.scroll_offset().y as f32;
+            let cb_id = node.containing_block();
+            if node.taffy_position() == taffy::Position::Fixed
+                && let Some(cb) = cb_id.and_then(|id| self.nodes.get(id))
+                && cb.is_root_element()
+            {
+                let scroll_offset = *cb.scroll_offset();
+                let viewport_scroll = self.viewport_scroll();
+                pos.x += scroll_offset.x as f32 + viewport_scroll.x as f32;
+                pos.y += scroll_offset.y as f32 + viewport_scroll.y as f32;
+            }
             has_vertical |= node.layout_data().writing_mode.is_vertical();
-            current = node.containing_block();
+            current = cb_id;
         }
         if !has_vertical {
             return (pos, *self.nodes[node_id].unrounded_layout());
@@ -566,6 +576,16 @@ impl BaseDocument {
         );
         pos.x += layout.location.x - node.scroll_offset().x as f32;
         pos.y += layout.location.y - node.scroll_offset().y as f32;
+        let cb_id = node.containing_block();
+        if node.taffy_position() == taffy::Position::Fixed
+            && let Some(cb) = cb_id.and_then(|id| self.nodes.get(id))
+            && cb.is_root_element()
+        {
+            let scroll_offset = *cb.scroll_offset();
+            let viewport_scroll = self.viewport_scroll();
+            pos.x += scroll_offset.x as f32 + viewport_scroll.x as f32;
+            pos.y += scroll_offset.y as f32 + viewport_scroll.y as f32;
+        }
         (pos, layout)
     }
 
@@ -605,6 +625,15 @@ impl BaseDocument {
         };
         pos.x += location.x - placer.scroll_offset().x as f32;
         pos.y += location.y - placer.scroll_offset().y as f32;
+        if placer.taffy_position() == taffy::Position::Fixed
+            && let Some(cb) = placer.containing_block().and_then(|id| self.nodes.get(id))
+            && cb.is_root_element()
+        {
+            let scroll_offset = *cb.scroll_offset();
+            let viewport_scroll = self.viewport_scroll();
+            pos.x += scroll_offset.x as f32 + viewport_scroll.x as f32;
+            pos.y += scroll_offset.y as f32 + viewport_scroll.y as f32;
+        }
         (pos, placer.layout_data().writing_mode, size)
     }
 }

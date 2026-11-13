@@ -270,7 +270,7 @@ pub struct BaseDocument {
 
     // Parley contexts
     /// A Parley font context
-    pub(crate) font_ctx: Arc<Mutex<parley::FontContext>>,
+    pub font_ctx: Arc<Mutex<parley::FontContext>>,
     #[cfg(feature = "parallel-construct")]
     /// Thread-and-document-local copies to the font context
     pub(crate) thread_font_contexts: ThreadLocal<RefCell<Box<FontContext>>>,
@@ -2530,7 +2530,17 @@ impl BaseDocument {
             let node = &self.nodes[id];
             pos.x += node.unrounded_layout().location.x - node.scroll_offset().x as f32;
             pos.y += node.unrounded_layout().location.y - node.scroll_offset().y as f32;
-            current = node.containing_block();
+            let cb_id = node.containing_block();
+            if node.taffy_position() == taffy::Position::Fixed
+                && let Some(cb) = cb_id.and_then(|id| self.nodes.get(id))
+                && cb.is_root_element()
+            {
+                let scroll_offset = *cb.scroll_offset();
+                let viewport_scroll = self.viewport_scroll();
+                pos.x += scroll_offset.x as f32 + viewport_scroll.x as f32;
+                pos.y += scroll_offset.y as f32 + viewport_scroll.y as f32;
+            }
+            current = cb_id;
         }
         (pos, *self.nodes[node_id].unrounded_layout())
     }
@@ -4441,5 +4451,210 @@ mod animation_tests {
         drop(driver);
         doc.set_capture_hook(None);
         assert!(doc.capture_hook().is_none());
+    }
+}
+
+#[cfg(test)]
+mod geometry_viewport_scroll_tests {
+    use super::*;
+    use crate::{Attribute, Point, qual_name};
+    use blitz_traits::shell::{ColorScheme, Viewport};
+
+    fn make_test_doc() -> (BaseDocument, NodeId, NodeId) {
+        let mut doc = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(800, 600, 1.0, ColorScheme::Light)),
+            ..Default::default()
+        });
+        let root_id = doc.root_node().id;
+        let style = |value: &str| Attribute {
+            name: qual_name!("style"),
+            value: value.to_string(),
+        };
+
+        let mut mutator = doc.mutate();
+        let html = mutator.create_element(qual_name!("html"), vec![]);
+        let body = mutator.create_element(
+            qual_name!("body"),
+            vec![style("margin: 0; width: 800px; height: 2000px;")],
+        );
+        mutator.append_children(html, &[body]);
+        mutator.append_children(root_id, &[html]);
+        drop(mutator);
+        (doc, html, body)
+    }
+
+    fn create_styled_div(doc: &mut BaseDocument, style: &str) -> NodeId {
+        let full_style = if style.contains("display:") {
+            style.to_string()
+        } else {
+            format!("display: block; {style}")
+        };
+        let mut mutator = doc.mutate();
+        mutator.create_element(
+            qual_name!("div"),
+            vec![Attribute {
+                name: qual_name!("style"),
+                value: full_style,
+            }],
+        )
+    }
+
+    #[test]
+    fn test_fixed_element_bounding_rect_invariant_under_viewport_scroll() {
+        let (mut doc, _html, body) = make_test_doc();
+        let fixed_id = create_styled_div(
+            &mut doc,
+            "position: fixed; top: 20px; left: 30px; width: 100px; height: 50px;",
+        );
+        let normal_id = create_styled_div(
+            &mut doc,
+            "position: static; margin-top: 40px; margin-left: 10px; width: 200px; height: 80px;",
+        );
+        let absolute_id = create_styled_div(
+            &mut doc,
+            "position: absolute; top: 150px; left: 60px; width: 120px; height: 60px;",
+        );
+
+        {
+            let mut mutator = doc.mutate();
+            mutator.append_children(body, &[fixed_id, normal_id, absolute_id]);
+        }
+
+        doc.resolve(0.0);
+
+        // 1. Initial state at viewport_scroll = (0.0, 0.0)
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 0.0 });
+        let fixed_rect_initial = doc.get_client_bounding_rect(fixed_id).unwrap();
+        let normal_rect_initial = doc.get_client_bounding_rect(normal_id).unwrap();
+        let absolute_rect_initial = doc.get_client_bounding_rect(absolute_id).unwrap();
+
+        assert_eq!(fixed_rect_initial.x, 30.0);
+        assert_eq!(fixed_rect_initial.y, 20.0);
+        assert_eq!(fixed_rect_initial.width, 100.0);
+        assert_eq!(fixed_rect_initial.height, 50.0);
+
+        // Verify initial absolute_position
+        let fixed_node = doc.get_node(fixed_id).unwrap();
+        let fixed_abs_initial = fixed_node.absolute_position(0.0, 0.0);
+        assert_eq!(fixed_abs_initial.x, 30.0);
+        assert_eq!(fixed_abs_initial.y, 20.0);
+
+        // 2a. Isolated X-only viewport scroll
+        doc.set_viewport_scroll(Point { x: 75.0, y: 0.0 });
+        assert_eq!(
+            doc.get_client_bounding_rect(fixed_id).unwrap(),
+            fixed_rect_initial,
+            "Fixed element get_client_bounding_rect invariant under X-only scroll"
+        );
+
+        // 2b. Isolated Y-only viewport scroll
+        doc.set_viewport_scroll(Point { x: 0.0, y: 150.0 });
+        assert_eq!(
+            doc.get_client_bounding_rect(fixed_id).unwrap(),
+            fixed_rect_initial,
+            "Fixed element get_client_bounding_rect invariant under Y-only scroll"
+        );
+
+        // 2c. Multi-axis X+Y viewport scroll to (50.0, 200.0)
+        doc.set_viewport_scroll(Point { x: 50.0, y: 200.0 });
+        assert_eq!(doc.viewport_scroll(), Point { x: 50.0, y: 200.0 });
+
+        let fixed_rect_scrolled = doc.get_client_bounding_rect(fixed_id).unwrap();
+        let normal_rect_scrolled = doc.get_client_bounding_rect(normal_id).unwrap();
+        let absolute_rect_scrolled = doc.get_client_bounding_rect(absolute_id).unwrap();
+
+        // Fixed element client rect must be EXACTLY identical after scrolling
+        assert_eq!(
+            fixed_rect_scrolled, fixed_rect_initial,
+            "Fixed element get_client_bounding_rect must be strictly invariant under viewport scroll"
+        );
+
+        // Normal and absolute element client rects must shift by (-50.0, -200.0)
+        assert_eq!(
+            normal_rect_scrolled.x,
+            normal_rect_initial.x - 50.0,
+            "Normal element x should shift by scroll x"
+        );
+        assert_eq!(
+            normal_rect_scrolled.y,
+            normal_rect_initial.y - 200.0,
+            "Normal element y should shift by scroll y"
+        );
+        assert_eq!(normal_rect_scrolled.width, normal_rect_initial.width);
+        assert_eq!(normal_rect_scrolled.height, normal_rect_initial.height);
+
+        assert_eq!(
+            absolute_rect_scrolled.x,
+            absolute_rect_initial.x - 50.0,
+            "Absolute element x should shift by scroll x"
+        );
+        assert_eq!(
+            absolute_rect_scrolled.y,
+            absolute_rect_initial.y - 200.0,
+            "Absolute element y should shift by scroll y"
+        );
+        assert_eq!(absolute_rect_scrolled.width, absolute_rect_initial.width);
+        assert_eq!(absolute_rect_scrolled.height, absolute_rect_initial.height);
+
+        // Fixed element absolute_position (Document-relative) must shift by (+50.0, +200.0)
+        let fixed_node = doc.get_node(fixed_id).unwrap();
+        let fixed_abs_scrolled = fixed_node.absolute_position(0.0, 0.0);
+        assert_eq!(
+            fixed_abs_scrolled.x,
+            fixed_abs_initial.x + 50.0,
+            "Fixed element document absolute_position x should include viewport scroll"
+        );
+        assert_eq!(
+            fixed_abs_scrolled.y,
+            fixed_abs_initial.y + 200.0,
+            "Fixed element document absolute_position y should include viewport scroll"
+        );
+
+        // offset_rect must also remain invariant under viewport scroll
+        let fixed_offset = doc.offset_rect(fixed_id).unwrap();
+        assert_eq!(fixed_offset.x, 30.0);
+        assert_eq!(fixed_offset.y, 20.0);
+    }
+
+    #[test]
+    fn test_fixed_element_inside_transformed_container_scrolls_with_container() {
+        let (mut doc, _html, body) = make_test_doc();
+        // A container with transform creates a containing block for fixed descendants per CSS Transforms Module §2.
+        let transformed_container = create_styled_div(
+            &mut doc,
+            "transform: scale(1); margin-top: 100px; margin-left: 40px; width: 400px; height: 300px;",
+        );
+        let fixed_child = create_styled_div(
+            &mut doc,
+            "position: fixed; top: 10px; left: 15px; width: 80px; height: 40px;",
+        );
+
+        {
+            let mut mutator = doc.mutate();
+            mutator.append_children(transformed_container, &[fixed_child]);
+            mutator.append_children(body, &[transformed_container]);
+        }
+
+        doc.resolve(0.0);
+
+        let initial_rect = doc.get_client_bounding_rect(fixed_child).unwrap();
+
+        // Scroll viewport
+        doc.set_viewport_scroll(Point { x: 30.0, y: 70.0 });
+
+        let scrolled_rect = doc.get_client_bounding_rect(fixed_child).unwrap();
+
+        // Because containing block is the transformed container (not the root element),
+        // the fixed element must scroll with the document/container!
+        assert_eq!(
+            scrolled_rect.x,
+            initial_rect.x - 30.0,
+            "Fixed element inside transformed container must shift with viewport scroll x"
+        );
+        assert_eq!(
+            scrolled_rect.y,
+            initial_rect.y - 70.0,
+            "Fixed element inside transformed container must shift with viewport scroll y"
+        );
     }
 }

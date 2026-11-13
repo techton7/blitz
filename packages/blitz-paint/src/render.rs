@@ -1199,18 +1199,10 @@ impl ElementCx<'_, '_> {
         if let Some(hoisted) = &self.node.stacking_context {
             for hoisted_child in hoisted.neg_z_hoisted_children() {
                 let position = hoisted_child.position(self.node.tree(), self.node.id);
-                let mut pos = kurbo::Vec2 {
+                let pos = kurbo::Vec2 {
                     x: position.x as f64 * self.scale,
                     y: position.y as f64 * self.scale,
                 };
-                let child = &self.context.dom.as_ref().tree()[hoisted_child.node_id];
-                if child.taffy_position() == taffy::Position::Fixed
-                    && Some(self.node.id) == self.context.root_element_id
-                {
-                    let scroll = self.context.dom.as_ref().viewport_scroll();
-                    pos.x += scroll.x * self.scale;
-                    pos.y += scroll.y * self.scale;
-                }
                 self.render_node(
                     scene,
                     hoisted_child.node_id,
@@ -1229,7 +1221,7 @@ impl ElementCx<'_, '_> {
                 // transformed ancestor scrolls with it like any out-of-flow box.
                 let child = &self.context.dom.as_ref().tree()[*child_id];
                 let child_transform = if child.taffy_position() == taffy::Position::Fixed
-                    && Some(self.node.id) == self.context.root_element_id
+                    && self.node.is_root_element()
                 {
                     let scroll = self.context.dom.as_ref().viewport_scroll();
                     parent_style_transform.pre_translate(kurbo::Vec2 {
@@ -1252,18 +1244,10 @@ impl ElementCx<'_, '_> {
         if let Some(hoisted) = &self.node.stacking_context {
             for hoisted_child in hoisted.pos_z_hoisted_children() {
                 let position = hoisted_child.position(self.node.tree(), self.node.id);
-                let mut pos = kurbo::Vec2 {
+                let pos = kurbo::Vec2 {
                     x: position.x as f64 * self.scale,
                     y: position.y as f64 * self.scale,
                 };
-                let child = &self.context.dom.as_ref().tree()[hoisted_child.node_id];
-                if child.taffy_position() == taffy::Position::Fixed
-                    && Some(self.node.id) == self.context.root_element_id
-                {
-                    let scroll = self.context.dom.as_ref().viewport_scroll();
-                    pos.x += scroll.x * self.scale;
-                    pos.y += scroll.y * self.scale;
-                }
                 self.render_node(
                     scene,
                     hoisted_child.node_id,
