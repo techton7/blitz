@@ -145,6 +145,11 @@ impl BaseDocument {
         // restyle is picked up on the next resolve pass; a redraw is requested
         // if the hovered node actually changes.
         self.refresh_hover();
+        if let Some(kb_id) = self.keyboard_active_node_id
+            && (!self.is_node_displayed(kb_id) || self.is_form_control_disabled(kb_id))
+        {
+            self.clear_keyboard_active_node();
+        }
 
         let mut subdoc_is_animating = false;
         for &node_id in &self.sub_document_nodes {

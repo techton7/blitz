@@ -416,8 +416,15 @@ impl DocumentMutator<'_> {
             return;
         }
 
-        if *attr == local_name!("disabled") && element.can_be_disabled() {
-            node.disable();
+        if *attr == local_name!("disabled") {
+            if element.can_be_disabled() {
+                node.disable();
+            }
+            if let Some(kb_id) = self.doc.keyboard_active_node_id
+                && self.doc.is_form_control_disabled(kb_id)
+            {
+                self.doc.clear_keyboard_active_node();
+            }
             return;
         }
 
@@ -1545,13 +1552,15 @@ impl<'doc> DocumentMutator<'doc> {
             return;
         };
 
-        let tagname = data.name.local.as_ref();
-        let type_attr = data.attr(local_name!("type"));
-        let value = data.attr(local_name!("value"));
+        let is_checkbox_or_radio = data.is_checkbox_input() || data.is_radio_input();
+        let is_button_input = data.is_button_input();
+        #[cfg(feature = "file-input")]
+        let is_file_input = data.is_file_input();
+        let value = data.attr(local_name!("value")).map(str::to_string);
 
         // Checkbox state must exist even if the input never gets a box (e.g. `display: none`
         // inside a `<label>`), so that it can be toggled and matched by `:checked`.
-        if let ("input", Some("checkbox" | "radio")) = (tagname, type_attr) {
+        if is_checkbox_or_radio {
             let element = self.doc.nodes[target_id].element_data_mut().unwrap();
             if element.checkbox_input_checked().is_none() {
                 let checked = element.has_attr(local_name!("checked"));
@@ -1562,17 +1571,16 @@ impl<'doc> DocumentMutator<'doc> {
         }
 
         // Add content of "value" attribute as a text node child if:
-        //   - Tag name is
-        if let ("input", Some("button" | "submit" | "reset"), Some(value)) =
-            (tagname, type_attr, value)
+        //   - Tag name is input and type is button/submit/reset
+        if is_button_input
+            && let Some(value) = value
         {
-            let value = value.to_string();
             let id = self.create_text_node(&value);
             self.append_children(target_id, &[id]);
             return;
         }
         #[cfg(feature = "file-input")]
-        if let ("input", Some("file")) = (tagname, type_attr) {
+        if is_file_input {
             let button_id = self.create_element(
                 qual_name!("button", html),
                 vec![

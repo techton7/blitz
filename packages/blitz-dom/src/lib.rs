@@ -125,6 +125,7 @@ pub use style::Atom;
 pub use style::invalidation::element::restyle_hints::RestyleHint;
 pub use style::media_queries::MediaType;
 pub use style::stylist::RegisterCustomPropertyResult;
+pub use style_dom::ElementState;
 pub type SelectorList = selectors::SelectorList<style::selector_parser::SelectorImpl>;
 pub use events::{EventDriver, EventHandler, NoopEventHandler};
 pub use html::{DummyHtmlParserProvider, HtmlParserProvider};

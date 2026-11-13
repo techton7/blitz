@@ -282,6 +282,9 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                 self.handle_dom_event(DomEvent::new(target, DomEventData::KeyUp(data)))
             }
             UiEvent::KeyDown(data) => {
+                if data.key == keyboard_types::Key::Named(keyboard_types::NamedKey::Escape) {
+                    self.doc.inner_mut().clear_keyboard_active_node();
+                }
                 self.handle_dom_event(DomEvent::new(target, DomEventData::KeyDown(data)))
             }
             UiEvent::Ime(data) => {
@@ -378,6 +381,10 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             let event_state = self.run_handler_event(&mut event, EventState::default());
             if !event_state.is_cancelled() {
                 self.run_default_action(&mut event);
+            } else if let DomEventData::KeyUp(ref key_event) = event.data
+                && matches!(&key_event.key, keyboard_types::Key::Character(s) if s == " ")
+            {
+                self.doc.inner_mut().clear_keyboard_active_node();
             }
         }
     }

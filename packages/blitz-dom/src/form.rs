@@ -230,18 +230,17 @@ fn construct_entry_list(doc: &BaseDocument, form_id: NodeId, submitter_id: NodeI
         //   field is an input element whose type attribute is in the Radio Button state and whose checkedness is false,
         //  then continue.
         if datalist_ancestor(doc, node.id)
-            || element.attr(local_name!("disabled")).is_some()
-            || (element.name.local == local_name!("button") && node.id != submitter_id)
-            || element.name.local == local_name!("input")
-                && ((matches!(element_type, Some("checkbox" | "radio"))
-                    && !element.checkbox_input_checked().unwrap_or(false))
-                    || matches!(element_type, Some("submit" | "button")))
+            || doc.is_form_control_disabled(node.id)
+            || ((element.name.local == local_name!("button") || element.is_button_input())
+                && node.id != submitter_id)
+            || ((element.is_checkbox_input() || element.is_radio_input())
+                && !element.checkbox_input_checked().unwrap_or(false))
         {
             continue;
         }
 
         // If the field element is an input element whose type attribute is in the Image Button state, then:
-        if element_type == Some("image") {
+        if element.is_image_input() {
             // If the field element is not submitter, then continue.
             if node.id != submitter_id {
                 continue;
@@ -276,9 +275,7 @@ fn construct_entry_list(doc: &BaseDocument, form_id: NodeId, submitter_id: NodeI
         //  and append it to entry list.
 
         // Otherwise, if the field element is an input element whose type attribute is in the Checkbox state or the Radio Button state, then:
-        if element.name.local == local_name!("input")
-            && matches!(element_type, Some("checkbox" | "radio"))
-        {
+        if element.is_checkbox_input() || element.is_radio_input() {
             // If the field element has a value attribute specified, then let value be the value of that attribute; otherwise, let value be the string "on".
             let value = element.attr(local_name!("value")).unwrap_or("on");
             // Create an entry with name and value, and append it to entry list.
@@ -287,7 +284,7 @@ fn construct_entry_list(doc: &BaseDocument, form_id: NodeId, submitter_id: NodeI
         }
         // Otherwise, if the field element is an input element whose type attribute is in the File Upload state, then:
         #[cfg(feature = "file-input")]
-        if element.name.local == local_name!("input") && matches!(element_type, Some("file")) {
+        if element.is_file_input() {
             // If there are no selected files, then create an entry with name and a new File object with an empty name, application/octet-stream as type, and an empty body, and append it to entry list.
             let Some(files) = element.file_data() else {
                 create_entry(name, EntryValue::EmptyFile);
@@ -306,7 +303,7 @@ fn construct_entry_list(doc: &BaseDocument, form_id: NodeId, submitter_id: NodeI
         }
         //Otherwise, if the field element is an input element whose type attribute is in the Hidden state and name is an ASCII case-insensitive match for "_charset_":
         if element.name.local == local_name!("input")
-            && element_type == Some("hidden")
+            && element_type.is_some_and(|t| t.eq_ignore_ascii_case("hidden"))
             && name.eq_ignore_ascii_case("_charset_")
         {
             // Let charset be the name of encoding.
@@ -342,9 +339,7 @@ fn get_submitter_attr(
     doc.get_node(submitter_id)
         .and_then(|node| node.element_data())
         .and_then(|element_data| {
-            if element_data.name.local == local_name!("button")
-                && element_data.attr(local_name!("type")) == Some("submit")
-            {
+            if element_data.is_submit_button() || element_data.is_submit_input() {
                 element_data.attr(local_name)
             } else {
                 None

@@ -291,8 +291,10 @@ pub struct BaseDocument {
     pub(crate) last_client_pointer_position: Option<taffy::Point<f32>>,
     /// The node which is currently focussed (if any)
     pub(crate) focus_node_id: Option<NodeId>,
-    /// The node which is currently active (if any)
+    /// The node which is currently active via pointer press (if any)
     pub(crate) active_node_id: Option<NodeId>,
+    /// The node which is currently armed/active via Space keydown (if any)
+    pub(crate) keyboard_active_node_id: Option<NodeId>,
     /// The node which recieved a mousedown event (if any)
     pub(crate) mousedown_node_id: Option<NodeId>,
     /// The last time a mousedown was made (for double-click detection)
@@ -520,6 +522,7 @@ impl BaseDocument {
             last_client_pointer_position: None,
             focus_node_id: None,
             active_node_id: None,
+            keyboard_active_node_id: None,
             mousedown_node_id: None,
             has_active_animations: false,
             subdoc_is_animating: false,
@@ -1012,6 +1015,19 @@ impl BaseDocument {
         }
         if self.active_node_id == Some(node_id) {
             self.active_node_id = self.nearest_surviving_element_ancestor(node_id);
+        }
+        let kb_active_in_removed_subtree = self.keyboard_active_node_id.is_some_and(|kb_id| {
+            let mut curr = Some(kb_id);
+            while let Some(id) = curr {
+                if id == node_id {
+                    return true;
+                }
+                curr = self.get_node(id).and_then(|n| n.parent);
+            }
+            false
+        });
+        if kb_active_in_removed_subtree {
+            self.clear_keyboard_active_node();
         }
         let focus_in_removed_subtree = self.focus_node_id.is_some_and(|focus_id| {
             let mut curr = Some(focus_id);
@@ -1831,28 +1847,142 @@ impl BaseDocument {
         Some(id)
     }
 
-    fn is_in_tab_order(&self, node: &Node) -> bool {
-        if !node.is_focussable() {
+    /// HTML §4.10.18.5: Whether `node_id` is a form control (`button`, `input`,
+    /// `select`, `textarea`) that is disabled either via its own `disabled`
+    /// attribute or via an ancestor `<fieldset disabled>` (unless `node_id` is
+    /// a descendant of that `<fieldset>`'s first `<legend>` element child).
+    pub fn is_form_control_disabled(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+        let Some(el) = node.element_data() else {
+            return false;
+        };
+        if !el.can_be_disabled() {
             return false;
         }
-        // Focusability is cached from attributes. A display:none ancestor
-        // suppresses the whole subtree even when the control's own cached
-        // focusability (or styles from an earlier layout) is unchanged.
-        let mut ancestor = Some(node);
-        while let Some(node) = ancestor {
-            if node
+        if el.has_attr(local_name!("disabled")) {
+            return true;
+        }
+
+        let mut child_id = node_id;
+        while let Some(parent_id) = self.get_node(child_id).and_then(|n| n.parent) {
+            let Some(parent) = self.get_node(parent_id) else {
+                break;
+            };
+            if parent.data.is_element_with_tag_name(&local_name!("fieldset"))
+                && parent.data.has_attr(local_name!("disabled"))
+            {
+                let first_legend_id = parent.children.iter().copied().find(|&cid| {
+                    self.get_node(cid)
+                        .is_some_and(|n| n.data.is_element_with_tag_name(&local_name!("legend")))
+                });
+                if Some(child_id) != first_legend_id {
+                    return true;
+                }
+            }
+            child_id = parent_id;
+        }
+
+        false
+    }
+
+    /// Whether `node_id` is the controlling `<summary>` of a `<details>` parent
+    /// (i.e. parent is `<details>` and `node_id` is its first `<summary>` element child).
+    pub fn is_controlling_summary(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+        if !node.data.is_element_with_tag_name(&local_name!("summary")) {
+            return false;
+        }
+        let Some(parent_id) = node.parent else {
+            return false;
+        };
+        let Some(parent) = self.get_node(parent_id) else {
+            return false;
+        };
+        parent
+            .data
+            .is_element_with_tag_name(&local_name!("details"))
+            && parent.children.iter().copied().find(|&child_id| {
+                self.get_node(child_id)
+                    .is_some_and(|n| n.data.is_element_with_tag_name(&local_name!("summary")))
+            }) == Some(node_id)
+    }
+
+    pub(crate) fn is_enter_non_link_activatable_element(&self, node_id: NodeId) -> bool {
+        let Some(el) = self.get_node(node_id).and_then(|n| n.element_data()) else {
+            return false;
+        };
+        match el.name.local {
+            local_name!("button") => true,
+            local_name!("input") => el.is_keyboard_clickable_input(),
+            local_name!("summary") => self.is_controlling_summary(node_id),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_space_activatable_element(&self, node_id: NodeId) -> bool {
+        let Some(el) = self.get_node(node_id).and_then(|n| n.element_data()) else {
+            return false;
+        };
+        match el.name.local {
+            local_name!("button") => true,
+            local_name!("input") => {
+                el.is_keyboard_clickable_input() || el.is_checkbox_input() || el.is_radio_input()
+            }
+            local_name!("summary") => self.is_controlling_summary(node_id),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_node_displayed(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+        if !node.flags.is_in_document() {
+            return false;
+        }
+        // UA stylesheet (`default.css`) sets `area { display: none !important; }` so `<area>`
+        // generates no CSS box of its own while remaining focusable/interactive when its
+        // ancestors are displayed.
+        let mut maybe_ancestor = if node.data.is_element_with_tag_name(&local_name!("area")) {
+            node.parent_node()
+        } else {
+            Some(node)
+        };
+        while let Some(ancestor) = maybe_ancestor {
+            if ancestor
                 .primary_styles()
                 .is_some_and(|styles| styles.clone_display().is_none())
             {
                 return false;
             }
-            ancestor = node.parent_node();
+            maybe_ancestor = ancestor.parent_node();
         }
         true
     }
 
+    fn is_in_tab_order(&self, node: &Node) -> bool {
+        if !node.is_focussable() || self.is_form_control_disabled(node.id) {
+            return false;
+        }
+        if node.data.is_element_with_tag_name(&local_name!("summary"))
+            && !node.data.has_attr(local_name!("tabindex"))
+            && !self.is_controlling_summary(node.id)
+        {
+            return false;
+        }
+        // Focusability is cached from attributes. A display:none ancestor
+        // suppresses the whole subtree even when the control's own cached
+        // focusability (or styles from an earlier layout) is unchanged.
+        self.is_node_displayed(node.id)
+    }
+
     /// Clear the focussed node
     pub fn clear_focus(&mut self) {
+        self.clear_keyboard_active_node();
         if let Some(id) = self.focus_node_id {
             let shell_provider = self.shell_provider.clone();
             self.snapshot_node_and(id, ElementState::FOCUS | ElementState::FOCUSRING, |node| {
@@ -1910,6 +2040,9 @@ impl BaseDocument {
         if !self.nodes[focus_node_id].flags.is_in_document() {
             return false;
         }
+
+        // Changing focus disarms any active Space key press
+        self.clear_keyboard_active_node();
 
         #[cfg(feature = "tracing")]
         tracing::info!("Focussed node {focus_node_id}");
@@ -1995,12 +2128,74 @@ impl BaseDocument {
             return false;
         };
 
+        let kb_path = self.maybe_node_element_ancestors(self.keyboard_active_node_id);
         let node_path = self.maybe_node_element_ancestors(Some(active_node_id));
         for &id in node_path.iter() {
-            self.snapshot_node_and(id, ElementState::ACTIVE, |node| node.unactive());
+            if !kb_path.contains(&id) {
+                self.snapshot_node_and(id, ElementState::ACTIVE, |node| node.unactive());
+            }
         }
 
         true
+    }
+
+    pub fn get_keyboard_active_node_id(&self) -> Option<NodeId> {
+        self.keyboard_active_node_id
+    }
+
+    pub fn set_keyboard_active_node(&mut self, node_id: NodeId) -> bool {
+        let Some(node_id) = self.nearest_non_anonymous_ancestor(node_id) else {
+            return false;
+        };
+        if !self.nodes[node_id].flags.is_in_document() {
+            return false;
+        }
+        if self.keyboard_active_node_id == Some(node_id) {
+            return false;
+        }
+        self.clear_keyboard_active_node();
+
+        let ptr_path = self.maybe_node_element_ancestors(self.active_node_id);
+        let node_path = self.node_element_ancestors(node_id);
+        for &id in node_path.iter() {
+            if !ptr_path.contains(&id) {
+                self.snapshot_node_and(id, ElementState::ACTIVE, |node| node.active());
+            }
+        }
+
+        self.keyboard_active_node_id = Some(node_id);
+        self.has_changes = true;
+        self.shell_provider.request_redraw();
+        true
+    }
+
+    pub fn take_keyboard_active_node(&mut self) -> Option<NodeId> {
+        let node_id = self.keyboard_active_node_id.take()?;
+        if self.nodes.contains_key(node_id) {
+            let ptr_path = self.maybe_node_element_ancestors(self.active_node_id);
+            let mut maybe_id = Some(node_id);
+            while let Some(node) = maybe_id.and_then(|id| self.get_node(id)) {
+                if !node.is_element() {
+                    break;
+                }
+                let id = node.id;
+                maybe_id = node.parent;
+                if !ptr_path.contains(&id) {
+                    if node.flags.is_in_document() {
+                        self.snapshot_node_and(id, ElementState::ACTIVE, |node| node.unactive());
+                    } else {
+                        self.nodes[id].unactive();
+                    }
+                }
+            }
+            self.has_changes = true;
+            self.shell_provider.request_redraw();
+        }
+        Some(node_id)
+    }
+
+    pub fn clear_keyboard_active_node(&mut self) -> bool {
+        self.take_keyboard_active_node().is_some()
     }
 
     /// The scrollbar thumb currently under the pointer, if any.

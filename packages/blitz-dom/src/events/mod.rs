@@ -9,7 +9,7 @@ use blitz_traits::events::{DomEvent, DomEventData, PointerCoords, UiEvent};
 pub use driver::{EventDriver, EventHandler, NoopEventHandler};
 use focus::generate_focus_events;
 pub(crate) use ime::handle_ime_event;
-use keyboard::{KeyboardOrTextInputEvent, handle_key_or_input_event};
+use keyboard::{KeyboardOrTextInputEvent, handle_key_or_input_event, handle_keyup_event};
 pub(crate) use pointer::DragMode;
 use pointer::{handle_click, handle_pointerdown, handle_pointermove, handle_pointerup};
 
@@ -114,7 +114,12 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
     mut dispatch_event: F,
 ) {
     let target_node_id = event.target;
-    let node = &mut doc.nodes[target_node_id];
+    let Some(node) = doc.nodes.get_mut(target_node_id) else {
+        return;
+    };
+    if !node.flags.is_in_document() {
+        return;
+    }
     let pos = node.absolute_position(0.0, 0.0);
 
     // Whether this event can move the caret/selection (or change the text) of a text input,
@@ -226,8 +231,8 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
         DomEventData::KeyPress(_) => {
             // Do nothing (no default action)
         }
-        DomEventData::KeyUp(_) => {
-            // Do nothing (no default action)
+        DomEventData::KeyUp(event) => {
+            handle_keyup_event(doc, target_node_id, &event.clone(), dispatch_event);
         }
         DomEventData::AppleStandardKeybinding(event) => {
             handle_key_or_input_event(

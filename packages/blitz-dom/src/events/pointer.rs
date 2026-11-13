@@ -458,10 +458,11 @@ pub(crate) fn handle_pointerdown(
         SelectableText,
     }
 
-    let click_target = {
+    let click_target = if doc.is_form_control_disabled(actual_target) {
+        ClickTarget::Disabled
+    } else {
         let node = &doc.nodes[actual_target];
         match node.data.downcast_element() {
-            Some(el) if el.has_attr(local_name!("disabled")) => ClickTarget::Disabled,
             Some(el) => {
                 if let SpecialElementData::TextInput(ref text_input_data) = el.special_data {
                     let mut content_box_offset = taffy::Point {
@@ -635,12 +636,21 @@ fn update_focus_for_press(
 ) {
     let mut maybe_node_id = Some(target);
     while let Some(node_id) = maybe_node_id {
+        if doc.is_form_control_disabled(node_id) {
+            return;
+        }
+        let is_non_controlling_summary = doc.nodes[node_id]
+            .element_data()
+            .is_some_and(|el| {
+                el.name.local == local_name!("summary")
+                    && el.attr_parsed::<i32>(local_name!("tabindex")).is_none()
+            })
+            && !doc.is_controlling_summary(node_id);
         let node = &doc.nodes[node_id];
         if let Some(el) = node.element_data() {
-            if el.has_attr(local_name!("disabled")) {
-                return;
-            }
-            if el.is_focussable || el.attr_parsed::<i32>(local_name!("tabindex")).is_some() {
+            if !is_non_controlling_summary
+                && (el.is_focussable || el.attr_parsed::<i32>(local_name!("tabindex")).is_some())
+            {
                 generate_focus_events(
                     doc,
                     &mut |doc| {
@@ -668,27 +678,25 @@ pub(crate) fn handle_click(
     let mut maybe_node_id = Some(target);
     'matched: {
         while let Some(node_id) = maybe_node_id {
-            let maybe_element = {
-                let node = &mut doc.nodes[node_id];
-                node.data.downcast_element_mut()
-            };
-
-            let Some(el) = maybe_element else {
+            if !doc.nodes[node_id].is_element() {
                 maybe_node_id = doc.nodes[node_id].parent;
                 continue;
-            };
+            }
 
-            let disabled = el.attr(local_name!("disabled")).is_some();
-            if disabled {
+            if doc.is_form_control_disabled(node_id) {
                 break 'matched;
             }
+
+            let is_controlling_summary = doc.is_controlling_summary(node_id);
+
+            let el = doc.nodes[node_id].data.downcast_element_mut().unwrap();
 
             if let SpecialElementData::TextInput(_) = el.special_data {
                 break 'matched;
             }
 
             match el.name.local {
-                local_name!("input") if el.attr(local_name!("type")) == Some("checkbox") => {
+                local_name!("input") if el.is_checkbox_input() => {
                     let mut is_checked = false;
                     doc.snapshot_node_and(node_id, ElementState::CHECKED, |node| {
                         if let Some(el) = node.element_data_mut() {
@@ -701,16 +709,18 @@ pub(crate) fn handle_click(
                         node_id,
                         DomEventData::Input(BlitzInputEvent { value }),
                     ));
-                    generate_focus_events(
-                        doc,
-                        &mut |doc| {
-                            doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
-                        },
-                        dispatch_event,
-                    );
+                    if doc.focus_node_id != Some(node_id) {
+                        generate_focus_events(
+                            doc,
+                            &mut |doc| {
+                                doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
+                            },
+                            dispatch_event,
+                        );
+                    }
                     break 'matched;
                 }
-                local_name!("input") if el.attr(local_name!("type")) == Some("radio") => {
+                local_name!("input") if el.is_radio_input() => {
                     if let Some(radio_set) = el.attr(local_name!("name")).map(str::to_string) {
                         BaseDocument::toggle_radio(doc, radio_set, node_id);
                     } else if el.checkbox_input_checked().is_some() {
@@ -729,32 +739,25 @@ pub(crate) fn handle_click(
                         DomEventData::Input(BlitzInputEvent { value }),
                     ));
 
-                    generate_focus_events(
-                        doc,
-                        &mut |doc| {
-                            doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
-                        },
-                        dispatch_event,
-                    );
+                    if doc.focus_node_id != Some(node_id) {
+                        generate_focus_events(
+                            doc,
+                            &mut |doc| {
+                                doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
+                            },
+                            dispatch_event,
+                        );
+                    }
 
                     break 'matched;
                 }
                 // Activating the first <summary> of a <details> element toggles
                 // the details' `open` attribute (expand/collapse).
                 local_name!("summary") => {
-                    if let Some(parent_id) = doc.nodes[node_id].parent {
-                        let parent = &doc.nodes[parent_id];
-                        let is_first_summary = parent
-                            .data
-                            .is_element_with_tag_name(&local_name!("details"))
-                            && parent.children.iter().copied().find(|&child_id| {
-                                doc.nodes[child_id]
-                                    .data
-                                    .is_element_with_tag_name(&local_name!("summary"))
-                            }) == Some(node_id);
-
-                        if is_first_summary {
-                            doc.toggle_details_open(parent_id);
+                    if is_controlling_summary {
+                        let parent_id = doc.nodes[node_id].parent.unwrap();
+                        doc.toggle_details_open(parent_id);
+                        if doc.focus_node_id != Some(node_id) {
                             generate_focus_events(
                                 doc,
                                 &mut |doc| {
@@ -762,8 +765,8 @@ pub(crate) fn handle_click(
                                 },
                                 dispatch_event,
                             );
-                            break 'matched;
                         }
+                        break 'matched;
                     }
                 }
                 // Clicking labels triggers click, and possibly input event, of associated input
@@ -775,17 +778,24 @@ pub(crate) fn handle_click(
                         let target_node = doc.get_node_mut(target_node_id).unwrap();
                         let syn_event = target_node.synthetic_click_event_data(event.mods);
                         handle_click(doc, target_node_id, &syn_event, dispatch_event);
-                        generate_focus_events(
-                            doc,
-                            &mut |doc| {
-                                doc.set_focus_to_with_source(target_node_id, FocusSource::Pointer);
-                            },
-                            dispatch_event,
-                        );
+                        if !doc.is_form_control_disabled(target_node_id)
+                            && doc.focus_node_id != Some(target_node_id)
+                        {
+                            generate_focus_events(
+                                doc,
+                                &mut |doc| {
+                                    doc.set_focus_to_with_source(
+                                        target_node_id,
+                                        FocusSource::Pointer,
+                                    );
+                                },
+                                dispatch_event,
+                            );
+                        }
                         break 'matched;
                     }
                 }
-                local_name!("a") => {
+                local_name!("a") | local_name!("area") => {
                     if let Some(href) = el.attr(local_name!("href")).map(str::to_string) {
                         if let Some(url) = doc.url.resolve_relative(&href) {
                             // If the link only differs from the current document URL by its
@@ -812,14 +822,15 @@ pub(crate) fn handle_click(
                     }
                 }
                 local_name!("input") | local_name!("button")
-                    if el.is_submit_button() || el.attr(local_name!("type")) == Some("submit") =>
+                    if el.is_submit_button() || el.is_submit_input() =>
                 {
                     if let Some(form_owner) = doc.controls_to_form.get(&node_id) {
                         doc.submit_form(*form_owner, node_id);
                     }
+                    break 'matched;
                 }
                 #[cfg(feature = "file-input")]
-                local_name!("input") if el.attr(local_name!("type")) == Some("file") => {
+                local_name!("input") if el.is_file_input() => {
                     use crate::qual_name;
                     //TODO: Handle accept attribute https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Attributes/accept by passing an appropriate filter
                     let multiple = el.attr(local_name!("multiple")).is_some();
@@ -846,12 +857,16 @@ pub(crate) fn handle_click(
                     } else {
                         el.special_data = SpecialElementData::FileInput(files.into())
                     }
-                    let child_label_id = doc.nodes[node_id].children[1];
-                    let child_text_id = doc.nodes[child_label_id].children[0];
-                    let text_data = doc.nodes[child_text_id]
-                        .text_data_mut()
-                        .expect("Text data not found");
-                    text_data.content = text_content;
+                    if let Some(&child_label_id) = doc.nodes[node_id].children.get(1)
+                        && let Some(&child_text_id) = doc.nodes[child_label_id].children.first()
+                        && let Some(text_data) = doc.nodes[child_text_id].text_data_mut()
+                    {
+                        text_data.content = text_content;
+                    }
+                    break 'matched;
+                }
+                local_name!("button") | local_name!("input") => {
+                    break 'matched;
                 }
                 _ => {}
             }

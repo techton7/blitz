@@ -469,11 +469,7 @@ impl ElementData {
 
         // Mirror the `checked` attribute into the element state so that `:checked`
         // selectors can be matched (and invalidated) from `ElementState`.
-        if data.name.local == local_name!("input")
-            && matches!(
-                data.attr(local_name!("type")),
-                Some("checkbox") | Some("radio")
-            )
+        if (data.is_checkbox_input() || data.is_radio_input())
             && data.has_attr(local_name!("checked"))
         {
             data.element_state.insert(ElementState::CHECKED);
@@ -673,9 +669,10 @@ impl ElementData {
     }
 
     pub fn flush_is_focussable(&mut self) {
-        // disabled is a boolean attribute: its presence is what counts. Parsing the value
-        // would read the spec-conformant empty form (`<input disabled>`) as not disabled.
-        let disabled: bool = self.has_attr(local_name!("disabled"));
+        // disabled is a boolean attribute: its presence is what counts, on elements
+        // that support being disabled (HTML §4.10.18.5). Non-disableable elements
+        // such as `<a href="..." disabled>` ignore `disabled`.
+        let disabled: bool = self.can_be_disabled() && self.has_attr(local_name!("disabled"));
         let tabindex: Option<i32> = self.attr_parsed(local_name!("tabindex"));
         let contains_sub_document: bool = self.sub_doc_data().is_some();
 
@@ -687,15 +684,18 @@ impl ElementData {
                         // Some focusable HTML elements have a default tabindex value of 0 set under the hood by the user agent.
                         // These elements are:
                         //   - <a> or <area> with href attribute
-                        //   - <button>, <frame>, <iframe>, <input>, <object>, <select>, <textarea>, and SVG <a> element
+                        //   - <button>, <frame>, <iframe>, <input> (except type="hidden"), <object>, <select>, <textarea>, and SVG <a> element
                         //   - <summary> element that provides summary for a <details> element.
 
                         if [local_name!("a"), local_name!("area")].contains(&self.name.local) {
                             self.attr(local_name!("href")).is_some()
+                        } else if self.name.local == local_name!("input") {
+                            !self
+                                .attr(local_name!("type"))
+                                .is_some_and(|t| t.eq_ignore_ascii_case("hidden"))
                         } else {
-                            const DEFAULT_FOCUSSABLE_ELEMENTS: [LocalName; 7] = [
+                            const DEFAULT_FOCUSSABLE_ELEMENTS: [LocalName; 6] = [
                                 local_name!("button"),
-                                local_name!("input"),
                                 local_name!("select"),
                                 local_name!("textarea"),
                                 local_name!("frame"),
@@ -858,22 +858,107 @@ impl ElementData {
 
     pub(crate) fn is_button_input(&self) -> bool {
         self.name.local == local_name!("input")
-            && matches!(
-                self.attr(local_name!("type")),
-                Some("button" | "submit" | "reset")
-            )
+            && self.attr(local_name!("type")).is_some_and(|t| {
+                t.eq_ignore_ascii_case("button")
+                    || t.eq_ignore_ascii_case("submit")
+                    || t.eq_ignore_ascii_case("reset")
+            })
     }
 
+    pub fn is_submit_input(&self) -> bool {
+        self.name.local == local_name!("input")
+            && self
+                .attr(local_name!("type"))
+                .is_some_and(|t| t.eq_ignore_ascii_case("submit") || t.eq_ignore_ascii_case("image"))
+    }
+
+    pub(crate) fn is_checkbox_input(&self) -> bool {
+        self.name.local == local_name!("input")
+            && self
+                .attr(local_name!("type"))
+                .is_some_and(|t| t.eq_ignore_ascii_case("checkbox"))
+    }
+
+    pub(crate) fn is_radio_input(&self) -> bool {
+        self.name.local == local_name!("input")
+            && self
+                .attr(local_name!("type"))
+                .is_some_and(|t| t.eq_ignore_ascii_case("radio"))
+    }
+
+    pub(crate) fn is_file_input(&self) -> bool {
+        self.name.local == local_name!("input")
+            && self
+                .attr(local_name!("type"))
+                .is_some_and(|t| t.eq_ignore_ascii_case("file"))
+    }
+
+    pub(crate) fn is_image_input(&self) -> bool {
+        self.name.local == local_name!("input")
+            && self
+                .attr(local_name!("type"))
+                .is_some_and(|t| t.eq_ignore_ascii_case("image"))
+    }
+
+    /// `<input>` states that synthesize `Click` on both `Enter` (`KeyDown`) and `Space` (`KeyUp`):
+    /// `button`, `submit`, `reset`, `image`, and `file`. (`checkbox` and `radio` activate on
+    /// `Space` only.)
+    pub(crate) fn is_keyboard_clickable_input(&self) -> bool {
+        self.is_button_input() || self.is_image_input() || self.is_file_input()
+    }
+
+    pub(crate) fn is_text_entry_input(&self) -> bool {
+        if self.name.local != local_name!("input") {
+            return false;
+        }
+        match self.attr(local_name!("type")) {
+            None => true,
+            Some(t) => {
+                t.eq_ignore_ascii_case("text")
+                    || t.eq_ignore_ascii_case("password")
+                    || t.eq_ignore_ascii_case("email")
+                    || t.eq_ignore_ascii_case("number")
+                    || t.eq_ignore_ascii_case("search")
+                    || t.eq_ignore_ascii_case("tel")
+                    || t.eq_ignore_ascii_case("url")
+            }
+        }
+    }
+
+    /// HTML §4.10.21.2 fields that block implicit form submission when no default submit button exists.
+    pub(crate) fn blocks_implicit_submission(&self) -> bool {
+        if self.name.local != local_name!("input") {
+            return false;
+        }
+        let t = self.attr(local_name!("type")).unwrap_or("text");
+        t.eq_ignore_ascii_case("text")
+            || t.eq_ignore_ascii_case("search")
+            || t.eq_ignore_ascii_case("email")
+            || t.eq_ignore_ascii_case("url")
+            || t.eq_ignore_ascii_case("tel")
+            || t.eq_ignore_ascii_case("password")
+            || t.eq_ignore_ascii_case("date")
+            || t.eq_ignore_ascii_case("month")
+            || t.eq_ignore_ascii_case("week")
+            || t.eq_ignore_ascii_case("time")
+            || t.eq_ignore_ascii_case("datetime-local")
+            || t.eq_ignore_ascii_case("number")
+    }
+
+    /// HTML §4.10.6: `<button>` missing value default (when neither `command` nor `commandfor` is
+    /// present) and invalid value default are both the Submit Button state.
     pub fn is_submit_button(&self) -> bool {
         if self.name.local != local_name!("button") {
             return false;
         }
-        let type_attr = self.attr(local_name!("type"));
-        let is_submit = type_attr == Some("submit");
-        let is_auto_submit = type_attr.is_none()
-            && self.attr(LocalName::from("command")).is_none()
-            && self.attr(LocalName::from("commandfor")).is_none();
-        is_submit || is_auto_submit
+        match self.attr(local_name!("type")) {
+            Some(t) if t.eq_ignore_ascii_case("button") || t.eq_ignore_ascii_case("reset") => false,
+            Some(_) => true,
+            None => {
+                !self.has_attr(LocalName::from("command"))
+                    && !self.has_attr(LocalName::from("commandfor"))
+            }
+        }
     }
 }
 

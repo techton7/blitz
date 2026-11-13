@@ -1,5 +1,4 @@
 use blitz_traits::node_id::NodeId;
-use core::str;
 use std::sync::Arc;
 use stylo_taffy::CopyStyleGetters;
 
@@ -427,20 +426,23 @@ fn collect_layout_children_with_wrap(
         // Handle text inputs
         let tag_name = el.name.local.as_ref();
         if matches!(tag_name, "input" | "textarea") {
-            let type_attr: Option<&str> = doc.nodes[container_node_id]
+            let (is_text_entry, is_checkbox_or_radio) = doc.nodes[container_node_id]
                 .data
                 .downcast_element()
-                .and_then(|el| el.attr(local_name!("type")));
+                .map(|el| {
+                    (
+                        el.is_text_entry_input(),
+                        el.is_checkbox_input() || el.is_radio_input(),
+                    )
+                })
+                .unwrap_or((false, false));
             if tag_name == "textarea" {
                 create_text_editor(doc, container_node_id, true);
                 return;
-            } else if matches!(
-                type_attr,
-                None | Some("text" | "password" | "email" | "number" | "search" | "tel" | "url")
-            ) {
+            } else if is_text_entry {
                 create_text_editor(doc, container_node_id, false);
                 return;
-            } else if matches!(type_attr, Some("checkbox" | "radio")) {
+            } else if is_checkbox_or_radio {
                 create_checkbox_input(doc, container_node_id);
                 return;
             }
