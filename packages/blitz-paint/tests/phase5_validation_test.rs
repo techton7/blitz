@@ -12,7 +12,7 @@ use blitz_html::HtmlDocument;
 use blitz_paint::bitmap_glyph::{compute_bitmap_placement_transform, extract_raster_glyph};
 use blitz_paint::paint_scene;
 use blitz_paint::text::{DrawTextContext, stroke_text};
-use kurbo::{Affine, Point, Rect, Shape, Stroke};
+use kurbo::{Affine, Point, Shape, Stroke};
 use parley::LayoutContext;
 use parley::fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
 use parley::style::StyleProperty;
@@ -73,6 +73,14 @@ impl PaintScene for RecordingScene {
     fn push_clip_layer(&mut self, _fill: Fill, transform: Affine, _clip: &impl Shape) {
         self.events.push(SceneEvent::PushClipLayer { transform });
     }
+    fn push_mask_layer(
+        &mut self,
+        _fill: Fill,
+        _mode: anyrender::MaskMode,
+        _transform: Affine,
+        _mask: &impl Shape,
+    ) {
+    }
     fn pop_layer(&mut self) {
         self.events.push(SceneEvent::PopLayer);
     }
@@ -125,10 +133,12 @@ impl PaintScene for RecordingScene {
     fn draw_box_shadow(
         &mut self,
         _transform: Affine,
-        _rect: Rect,
-        _brush: Color,
-        _radius: f64,
+        _box_shape: &anyrender::NonUniformRoundedRect,
+        _offset: kurbo::Vec2,
+        _spread: f64,
         _std_dev: f64,
+        _brush: Color,
+        _kind: anyrender::BoxShadowKind,
     ) {
     }
 }

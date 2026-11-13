@@ -66,6 +66,14 @@ impl PaintScene for RecordingScene {
     ) {
     }
     fn push_clip_layer(&mut self, _fill: Fill, _transform: Affine, _clip: &impl Shape) {}
+    fn push_mask_layer(
+        &mut self,
+        _fill: Fill,
+        _mode: anyrender::MaskMode,
+        _transform: Affine,
+        _mask: &impl Shape,
+    ) {
+    }
     fn pop_layer(&mut self) {}
     fn stroke<'a>(
         &mut self,
@@ -127,10 +135,12 @@ impl PaintScene for RecordingScene {
     fn draw_box_shadow(
         &mut self,
         _transform: Affine,
-        _rect: Rect,
-        _brush: Color,
-        _radius: f64,
+        _box_shape: &anyrender::NonUniformRoundedRect,
+        _offset: kurbo::Vec2,
+        _spread: f64,
         _std_dev: f64,
+        _brush: Color,
+        _kind: anyrender::BoxShadowKind,
     ) {
     }
 }
