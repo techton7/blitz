@@ -1117,7 +1117,7 @@ impl BaseDocument {
 }
 
 #[cfg(test)]
-mod tests {
+mod clamp_scroll_tests {
     use super::*;
     use crate::{Attribute, DocumentConfig, qual_name};
     use blitz_traits::shell::{ColorScheme, Viewport};

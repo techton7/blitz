@@ -223,9 +223,7 @@ impl Node {
     #[inline]
     pub fn try_layout_data(&self) -> Option<&LayoutData> {
         match &self.data {
-            NodeData::Element(data) | NodeData::AnonymousBlock(data) => {
-                data.layout_data.as_deref()
-            }
+            NodeData::Element(data) | NodeData::AnonymousBlock(data) => data.layout_data.as_deref(),
             NodeData::Document(data) => data.layout_data.as_deref(),
             _ => None,
         }
