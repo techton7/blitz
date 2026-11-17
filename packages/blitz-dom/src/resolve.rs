@@ -116,6 +116,8 @@ impl BaseDocument {
 
         // Next we resolve layout with the data resolved by stlist
         self.resolve_layout();
+        self.clamp_viewport_scroll();
+        self.clamp_scroll_animation();
         timer.record_time("layout");
         self.nodes.bump_geometry_generation();
 
@@ -124,8 +126,6 @@ impl BaseDocument {
         self.flags.remove(DocumentFlags::RESOLVE_ALL_TRANSFORMS);
         self.resolve_transforms(root_node_id, resolve_all);
         timer.record_time("transform");
-
-        self.clamp_scroll_offsets();
 
         // Build paint children / stacking contexts for damaged subtrees. Runs
         // after layout and transforms so that stacking-context roots created by
@@ -190,7 +190,11 @@ impl BaseDocument {
 
         let scale = self.viewport.scale_f64();
 
+        // Anonymous boxes are never skipped: damage marking walks the DOM
+        // parent chain, which bypasses them, so a damaged descendant may be
+        // reachable only through an undamaged anonymous box.
         if !resolve_all
+            && !self.nodes[node_id].is_anonymous()
             && !self.nodes[node_id]
                 .damage()
                 .map(|d| d.contains(style::selector_parser::RestyleDamage::RECALCULATE_OVERFLOW))

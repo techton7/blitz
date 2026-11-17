@@ -735,12 +735,12 @@ impl LayoutContainingBlock for LayoutPassState<'_> {
 impl taffy::CacheTree for LayoutPassState<'_> {
     #[inline]
     fn cache_get(
-        &mut self,
+        &self,
         node_id: NodeId,
         inputs: &taffy::LayoutInput,
     ) -> Option<taffy::LayoutOutput> {
-        self.node_from_id_mut(node_id)
-            .try_layout_data_mut()?
+        self.node_from_id(node_id)
+            .try_layout_data()?
             .cache
             .get(inputs)
     }
@@ -853,6 +853,7 @@ impl RoundTree for LayoutPassState<'_> {
 
     fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout) {
         *self.node_from_id_mut(node_id).final_layout_mut() = *layout;
+        self.clamp_node_scroll_offset(dom_node_id(node_id));
     }
 
     fn is_out_of_flow(&self, node_id: NodeId) -> bool {

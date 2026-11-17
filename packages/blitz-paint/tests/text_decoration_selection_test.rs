@@ -82,6 +82,7 @@ impl PaintScene for RecordingScene {
         _brush: impl Into<PaintRef<'a>>,
         _brush_transform: Option<Affine>,
         shape: &impl Shape,
+        _anti_aliasing: anyrender::AntiAliasing,
     ) {
         let bbox = shape.bounding_box();
         self.events.push(SceneEvent::Stroke {
@@ -97,6 +98,7 @@ impl PaintScene for RecordingScene {
         _brush: impl Into<PaintRef<'a>>,
         _brush_transform: Option<Affine>,
         shape: &impl Shape,
+        _anti_aliasing: anyrender::AntiAliasing,
     ) {
         let bbox = shape.bounding_box();
         self.events.push(SceneEvent::Fill {
@@ -117,6 +119,7 @@ impl PaintScene for RecordingScene {
         transform: Affine,
         _glyph_transform: Option<Affine>,
         glyphs: impl Iterator<Item = anyrender::Glyph> + Clone,
+        _anti_aliasing: anyrender::AntiAliasing,
     ) {
         self.events.push(SceneEvent::DrawGlyphs {
             glyph_ids: glyphs.map(|g| g.id).collect(),

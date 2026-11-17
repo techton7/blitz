@@ -1,4 +1,4 @@
-use anyrender::PaintScene;
+use anyrender::{AntiAliasing, PaintScene};
 use blitz_dom::CopyStyleGetters;
 use blitz_dom::{BaseDocument, NodeId, node::TextBrush};
 use kurbo::{Affine, Rect};
@@ -65,7 +65,14 @@ pub fn draw_inline_backgrounds<'a>(
             let y1 = baseline + metrics.descent as f64;
             let rect = Rect::new(x, y0, x + w, y1);
 
-            scene.fill(Fill::NonZero, transform, bg_color, None, &rect);
+            scene.fill(
+                Fill::NonZero,
+                transform,
+                bg_color,
+                None,
+                &rect,
+                AntiAliasing::Enabled,
+            );
         }
     }
 }
@@ -359,7 +366,7 @@ fn draw_glyph_run_hybrid(
     let glyph_xform = run
         .synthesis()
         .skew()
-        .map(|angle| Affine::skew(angle.to_radians().tan() as f64, 0.0));
+        .map(|angle| Affine::skew(-angle.to_radians().tan() as f64, 0.0));
 
     let embolden = if FONT_EMBOLDEN_ENABLED {
         font_embolden(font_size as f64, color, transform)
@@ -391,6 +398,7 @@ fn draw_glyph_run_hybrid(
                     transform,
                     glyph_xform,
                     vector_glyphs_scratch.iter().copied(),
+                    AntiAliasing::Enabled,
                 );
                 vector_glyphs_scratch.clear();
             }
@@ -438,6 +446,7 @@ fn draw_glyph_run_hybrid(
             transform,
             glyph_xform,
             vector_glyphs_scratch.iter().copied(),
+            AntiAliasing::Enabled,
         );
         vector_glyphs_scratch.clear();
     }
@@ -460,7 +469,7 @@ pub(crate) fn draw_glyph_run(
     let glyph_xform = run
         .synthesis()
         .skew()
-        .map(|angle| Affine::skew(angle.to_radians().tan() as f64, 0.0));
+        .map(|angle| Affine::skew(-angle.to_radians().tan() as f64, 0.0));
 
     let embolden = if FONT_EMBOLDEN_ENABLED {
         font_embolden(font_size as f64, color, transform)
@@ -472,12 +481,12 @@ pub(crate) fn draw_glyph_run(
     scene.draw_glyphs(
         run.font(),
         font_size,
-        !FONT_EMBOLDEN_ENABLED, // hint
+        !FONT_EMBOLDEN_ENABLED,
         normalized_coords,
         embolden,
         Fill::NonZero,
         &anyrender::Paint::from(color),
-        1.0, // alpha
+        1.0,
         transform,
         glyph_xform,
         glyph_run.positioned_glyphs().map(|glyph| anyrender::Glyph {
@@ -485,6 +494,7 @@ pub(crate) fn draw_glyph_run(
             x: glyph.x,
             y: glyph.y,
         }),
+        AntiAliasing::Enabled,
     );
 }
 
@@ -515,7 +525,14 @@ pub fn draw_text_selection(
 
     selection.geometry_with(layout, |rect, _line_idx| {
         let rect = kurbo::Rect::new(rect.x0, rect.y0, rect.x1, rect.y1);
-        scene.fill(Fill::NonZero, transform, SELECTION_COLOR, None, &rect);
+        scene.fill(
+            Fill::NonZero,
+            transform,
+            SELECTION_COLOR,
+            None,
+            &rect,
+            AntiAliasing::Enabled,
+        );
     });
 }
 

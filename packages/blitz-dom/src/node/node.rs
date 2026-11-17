@@ -218,8 +218,8 @@ impl Node {
         }
     }
 
-    /// Access to this node's layout output state, if it has been allocated.
-    /// Never allocates. Returns `None` for node kinds which do not participate in layout.
+    /// This node's layout output state, if it has been allocated. Returns
+    /// `None` for node kinds which do not participate in layout.
     #[inline]
     pub fn try_layout_data(&self) -> Option<&LayoutData> {
         match &self.data {

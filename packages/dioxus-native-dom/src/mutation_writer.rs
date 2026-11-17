@@ -1,7 +1,6 @@
 //! Integration between Dioxus and Blitz
 use crate::{
-    NodeId, mutation_buffer::MutationBuffer, qual_name, qual_name_attr, trace,
-    write_once_attr::WriteOnceAttr,
+    NodeId, mutation_buffer::MutationBuffer, qual_name, trace, write_once_attr::WriteOnceAttr,
 };
 use blitz_dom::{BaseDocument, Document, DocumentMutator, Widget};
 use blitz_traits::events::DomEventKind;
@@ -505,7 +504,7 @@ fn set_attribute_inner(
         return;
     }
 
-    let name = qual_name_attr(local_name, ns);
+    let name = qual_name(local_name, Some(ns.unwrap_or("")));
 
     // FIXME: more principled handling of special case attributes
     match value {

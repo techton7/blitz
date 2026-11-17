@@ -91,6 +91,7 @@ impl PaintScene for RecordingScene {
         _brush: impl Into<PaintRef<'a>>,
         _brush_transform: Option<Affine>,
         _shape: &impl Shape,
+        _anti_aliasing: anyrender::AntiAliasing,
     ) {
     }
     fn fill<'a>(
@@ -100,6 +101,7 @@ impl PaintScene for RecordingScene {
         _brush: impl Into<PaintRef<'a>>,
         _brush_transform: Option<Affine>,
         _shape: &impl Shape,
+        _anti_aliasing: anyrender::AntiAliasing,
     ) {
     }
     fn draw_glyphs<'a, 's: 'a>(
@@ -115,6 +117,7 @@ impl PaintScene for RecordingScene {
         transform: Affine,
         _glyph_transform: Option<Affine>,
         glyphs: impl Iterator<Item = anyrender::Glyph> + Clone,
+        _anti_aliasing: anyrender::AntiAliasing,
     ) {
         self.events.push(SceneEvent::DrawGlyphs {
             glyph_ids: glyphs.map(|g| g.id).collect(),
