@@ -724,7 +724,13 @@ pub(crate) fn handle_click(
                     let value = is_checked.to_string();
                     dispatch_event(DomEvent::new(
                         node_id,
-                        DomEventData::Input(BlitzInputEvent { value }),
+                        DomEventData::Input(BlitzInputEvent {
+                            value: value.clone(),
+                        }),
+                    ));
+                    dispatch_event(DomEvent::new(
+                        node_id,
+                        DomEventData::Change(BlitzInputEvent { value }),
                     ));
                     if doc.focus_node_id != Some(node_id) {
                         generate_focus_events(
@@ -738,6 +744,7 @@ pub(crate) fn handle_click(
                     break 'matched;
                 }
                 local_name!("input") if el.is_radio_input() => {
+                    let was_checked = el.checkbox_input_checked().unwrap_or(false);
                     if let Some(radio_set) = el.attr(local_name!("name")).map(str::to_string) {
                         BaseDocument::toggle_radio(doc, radio_set, node_id);
                     } else if el.checkbox_input_checked().is_some() {
@@ -749,12 +756,23 @@ pub(crate) fn handle_click(
                         });
                     }
 
-                    // TODO: make input event conditional on value actually changing
-                    let value = String::from("true");
-                    dispatch_event(DomEvent::new(
-                        node_id,
-                        DomEventData::Input(BlitzInputEvent { value }),
-                    ));
+                    let is_checked = doc.nodes[node_id]
+                        .element_data()
+                        .and_then(|el| el.checkbox_input_checked())
+                        .unwrap_or(false);
+                    if !was_checked && is_checked {
+                        let value = String::from("true");
+                        dispatch_event(DomEvent::new(
+                            node_id,
+                            DomEventData::Input(BlitzInputEvent {
+                                value: value.clone(),
+                            }),
+                        ));
+                        dispatch_event(DomEvent::new(
+                            node_id,
+                            DomEventData::Change(BlitzInputEvent { value }),
+                        ));
+                    }
 
                     if doc.focus_node_id != Some(node_id) {
                         generate_focus_events(
@@ -786,16 +804,31 @@ pub(crate) fn handle_click(
                         break 'matched;
                     }
                 }
-                // Clicking labels triggers click, and possibly input event, of associated input
                 local_name!("label") => {
                     if let Some(target_node_id) =
                         doc.label_bound_input_element(node_id).map(|n| n.id)
                     {
-                        // Apply default click event action for target node
+                        let mut current = Some(target);
+                        while let Some(id) = current
+                            && id != node_id
+                        {
+                            if id == target_node_id
+                                || doc.nodes[id]
+                                    .element_data()
+                                    .is_some_and(|el| el.is_interactive())
+                            {
+                                break 'matched;
+                            }
+                            current = doc.nodes[id].parent;
+                        }
+
                         let target_node = doc.get_node_mut(target_node_id).unwrap();
                         let syn_event = target_node.synthetic_click_event_data(event.mods);
                         handle_click(doc, target_node_id, &syn_event, dispatch_event);
-                        if !doc.is_form_control_disabled(target_node_id) {
+                        let target_node = &doc.nodes[target_node_id];
+                        if target_node.is_focussable()
+                            && !doc.is_form_control_disabled(target_node_id)
+                        {
                             generate_focus_events(
                                 doc,
                                 &mut |doc| {

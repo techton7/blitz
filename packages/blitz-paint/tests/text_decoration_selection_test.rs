@@ -301,10 +301,11 @@ fn test_ac1_underline_spans_across_emoji_run() {
                 bounding_box,
                 width,
                 ..
-            } => Some((bounding_box, *width)),
+            } => Some((*bounding_box, *width)),
+            SceneEvent::Fill { bounding_box, .. } => Some((*bounding_box, bounding_box.width())),
             _ => None,
         })
-        .expect("Underline stroke event must be generated");
+        .expect("Underline decoration event must be generated");
 
     let (bbox, width) = stroke_event;
     let tol = 1e-3;
@@ -401,6 +402,7 @@ fn test_ac1_line_through_and_overline_span_across_emoji_run() {
                 width,
                 ..
             } => Some((*bounding_box, *width)),
+            SceneEvent::Fill { bounding_box, .. } => Some((*bounding_box, bounding_box.width())),
             _ => None,
         })
         .collect();

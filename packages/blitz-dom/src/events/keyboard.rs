@@ -219,6 +219,12 @@ impl BaseDocument {
                 self.shell_provider.request_redraw();
             }
             GeneratedTextInputEvent::Submit => {
+                if let Some(value) = input_data.commit_change() {
+                    dispatch_event(DomEvent::new(
+                        node_id,
+                        DomEventData::Change(BlitzInputEvent { value }),
+                    ));
+                }
                 implicit_form_submission(self, node_id, dispatch_event);
             }
         }

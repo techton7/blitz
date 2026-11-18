@@ -82,6 +82,7 @@ impl std::fmt::Debug for TextLayout {
 }
 
 // TODO: support keypress events
+#[derive(Debug, PartialEq, Eq)]
 pub enum GeneratedTextInputEvent {
     Input,
     Select,
@@ -104,6 +105,7 @@ pub struct TextInputData {
     /// `final_layout`. Paint draws text from the unrounded origin so that it keeps its sub-pixel
     /// position while box edges stay snapped. Set by the `writing-mode` layout pass; zero otherwise.
     pub content_box_subpixel_offset: taffy::Point<f32>,
+    pub(crate) committed_value: String,
 }
 
 // FIXME: Implement Clone for PlainEditor
@@ -121,6 +123,23 @@ impl TextInputData {
             is_multiline,
             scroll_offset: 0.0,
             content_box_subpixel_offset: taffy::Point::ZERO,
+            committed_value: String::new(),
+        }
+    }
+
+    pub(crate) fn sync_committed_value(&mut self) {
+        self.committed_value.clear();
+        self.committed_value.push_str(self.editor.raw_text());
+    }
+
+    pub(crate) fn commit_change(&mut self) -> Option<String> {
+        let current = self.editor.raw_text();
+        if current != self.committed_value {
+            let value = current.to_string();
+            self.committed_value = value.clone();
+            Some(value)
+        } else {
+            None
         }
     }
 
@@ -287,17 +306,11 @@ impl TextInputData {
         match event.key {
             Key::Named(NamedKey::ArrowLeft) => {
                 #[cfg(target_os = "macos")]
-                {
-                    if action_mod {
-                        if shift {
-                            driver.select_to_line_start();
-                        } else {
-                            driver.move_to_line_start();
-                        }
-                    } else if shift {
-                        driver.select_left();
+                if action_mod {
+                    if shift {
+                        driver.select_to_line_start();
                     } else {
-                        driver.move_left();
+                        driver.move_to_line_start();
                     }
                     return Some(GeneratedTextInputEvent::Select);
                 }
@@ -320,17 +333,11 @@ impl TextInputData {
             }
             Key::Named(NamedKey::ArrowRight) => {
                 #[cfg(target_os = "macos")]
-                {
-                    if action_mod {
-                        if shift {
-                            driver.select_to_line_end();
-                        } else {
-                            driver.move_to_line_end();
-                        }
-                    } else if shift {
-                        driver.select_right();
+                if action_mod {
+                    if shift {
+                        driver.select_to_line_end();
                     } else {
-                        driver.move_right();
+                        driver.move_to_line_end();
                     }
                     return Some(GeneratedTextInputEvent::Select);
                 }
@@ -353,17 +360,11 @@ impl TextInputData {
             }
             Key::Named(NamedKey::ArrowUp) => {
                 #[cfg(target_os = "macos")]
-                {
-                    if action_mod {
-                        if shift {
-                            driver.select_to_text_start();
-                        } else {
-                            driver.move_to_text_start();
-                        }
-                    } else if shift {
-                        driver.select_up();
+                if action_mod {
+                    if shift {
+                        driver.select_to_text_start();
                     } else {
-                        driver.move_up();
+                        driver.move_to_text_start();
                     }
                     return Some(GeneratedTextInputEvent::Select);
                 }
@@ -380,17 +381,11 @@ impl TextInputData {
             }
             Key::Named(NamedKey::ArrowDown) => {
                 #[cfg(target_os = "macos")]
-                {
-                    if action_mod {
-                        if shift {
-                            driver.select_to_text_end();
-                        } else {
-                            driver.move_to_text_end();
-                        }
-                    } else if shift {
-                        driver.select_down();
+                if action_mod {
+                    if shift {
+                        driver.select_to_text_end();
                     } else {
-                        driver.move_down();
+                        driver.move_to_text_end();
                     }
                     return Some(GeneratedTextInputEvent::Select);
                 }
@@ -435,8 +430,11 @@ impl TextInputData {
             }
             Key::Named(NamedKey::Delete) => {
                 #[cfg(target_os = "macos")]
-                {
-                    driver.delete();
+                if action_mod {
+                    if driver.editor.raw_selection().is_collapsed() {
+                        driver.select_to_line_end();
+                    }
+                    driver.delete_selection();
                     return Some(GeneratedTextInputEvent::Input);
                 }
 
@@ -452,15 +450,11 @@ impl TextInputData {
             }
             Key::Named(NamedKey::Backspace) => {
                 #[cfg(target_os = "macos")]
-                {
-                    if action_mod {
-                        if driver.editor.raw_selection().is_collapsed() {
-                            driver.select_to_line_start();
-                        }
-                        driver.delete_selection();
-                    } else {
-                        driver.backdelete();
+                if action_mod {
+                    if driver.editor.raw_selection().is_collapsed() {
+                        driver.select_to_line_start();
                     }
+                    driver.delete_selection();
                     return Some(GeneratedTextInputEvent::Input);
                 }
 
@@ -993,5 +987,161 @@ mod tests {
             BlitzImeEvent::Commit("text".into()),
         );
         assert_eq!(input.editor.text(), "text");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_apple_keybinding_and_keydown_do_not_double_apply() {
+        use blitz_traits::{events::KeyState, shell::DummyShellProvider};
+        use keyboard_types::{Code, Location};
+
+        let shell = DummyShellProvider;
+        let mut font_ctx = FontContext::new();
+        let mut layout_ctx = LayoutContext::new();
+        let mut input = TextInputData::new(false);
+        input.set_text(&mut font_ctx, &mut layout_ctx, "hello world");
+        // Move caret to end via Cmd+ArrowRight
+        input.apply_keypress_event(
+            &mut font_ctx,
+            &mut layout_ctx,
+            &shell,
+            BlitzKeyEvent {
+                key: Key::Named(NamedKey::ArrowRight),
+                code: Code::ArrowRight,
+                modifiers: Modifiers::META,
+                location: Location::Standard,
+                is_auto_repeating: false,
+                is_composing: false,
+                state: KeyState::Pressed,
+                text: None,
+            },
+        );
+
+        // 1. Backspace: AppleStandardKeybinding("deleteBackward:") + KeyDown(Backspace) -> deletes 1 char
+        assert_eq!(
+            input.apply_apple_standard_keybinding(
+                &mut font_ctx,
+                &mut layout_ctx,
+                &shell,
+                "deleteBackward:",
+            ),
+            Some(GeneratedTextInputEvent::Input)
+        );
+        assert_eq!(
+            input.apply_keypress_event(
+                &mut font_ctx,
+                &mut layout_ctx,
+                &shell,
+                BlitzKeyEvent {
+                    key: Key::Named(NamedKey::Backspace),
+                    code: Code::Backspace,
+                    modifiers: Modifiers::empty(),
+                    location: Location::Standard,
+                    is_auto_repeating: false,
+                    is_composing: false,
+                    state: KeyState::Pressed,
+                    text: None,
+                },
+            ),
+            None
+        );
+        assert_eq!(input.editor.text(), "hello worl");
+
+        // 2. ArrowLeft: AppleStandardKeybinding("moveLeft:") + KeyDown(ArrowLeft) -> moves 1 char left
+        assert_eq!(
+            input.apply_apple_standard_keybinding(
+                &mut font_ctx,
+                &mut layout_ctx,
+                &shell,
+                "moveLeft:",
+            ),
+            Some(GeneratedTextInputEvent::Select)
+        );
+        assert_eq!(
+            input.apply_keypress_event(
+                &mut font_ctx,
+                &mut layout_ctx,
+                &shell,
+                BlitzKeyEvent {
+                    key: Key::Named(NamedKey::ArrowLeft),
+                    code: Code::ArrowLeft,
+                    modifiers: Modifiers::empty(),
+                    location: Location::Standard,
+                    is_auto_repeating: false,
+                    is_composing: false,
+                    state: KeyState::Pressed,
+                    text: None,
+                },
+            ),
+            None
+        );
+        // Delete forward 1 char ("l") -> "hello wor"
+        assert_eq!(
+            input.apply_apple_standard_keybinding(
+                &mut font_ctx,
+                &mut layout_ctx,
+                &shell,
+                "deleteForward:",
+            ),
+            Some(GeneratedTextInputEvent::Input)
+        );
+        assert_eq!(
+            input.apply_keypress_event(
+                &mut font_ctx,
+                &mut layout_ctx,
+                &shell,
+                BlitzKeyEvent {
+                    key: Key::Named(NamedKey::Delete),
+                    code: Code::Delete,
+                    modifiers: Modifiers::empty(),
+                    location: Location::Standard,
+                    is_auto_repeating: false,
+                    is_composing: false,
+                    state: KeyState::Pressed,
+                    text: None,
+                },
+            ),
+            None
+        );
+        assert_eq!(input.editor.text(), "hello wor");
+
+        // 3. Korean layout physical Cmd+A (`Key::Character("ㅁ")`, `Code::KeyA`, `Modifiers::META`) + Cmd+Backspace
+        assert_eq!(
+            input.apply_keypress_event(
+                &mut font_ctx,
+                &mut layout_ctx,
+                &shell,
+                BlitzKeyEvent {
+                    key: Key::Character("ㅁ".into()),
+                    code: Code::KeyA,
+                    modifiers: Modifiers::META,
+                    location: Location::Standard,
+                    is_auto_repeating: false,
+                    is_composing: false,
+                    state: KeyState::Pressed,
+                    text: Some("ㅁ".into()),
+                },
+            ),
+            Some(GeneratedTextInputEvent::Select)
+        );
+        assert_eq!(
+            input.apply_keypress_event(
+                &mut font_ctx,
+                &mut layout_ctx,
+                &shell,
+                BlitzKeyEvent {
+                    key: Key::Named(NamedKey::Backspace),
+                    code: Code::Backspace,
+                    modifiers: Modifiers::META,
+                    location: Location::Standard,
+                    is_auto_repeating: false,
+                    is_composing: false,
+                    state: KeyState::Pressed,
+                    text: None,
+                },
+            ),
+            Some(GeneratedTextInputEvent::Input)
+        );
+        assert_eq!(input.editor.text(), "");
     }
 }
