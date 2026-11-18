@@ -691,6 +691,7 @@ pub(crate) fn handle_click(
     dispatch_event: &mut dyn FnMut(DomEvent),
 ) {
     let double_click_event = event.clone();
+    let is_double_click = doc.click_count == 2;
 
     let mut maybe_node_id = Some(target);
     'matched: {
@@ -822,23 +823,24 @@ pub(crate) fn handle_click(
                             current = doc.nodes[id].parent;
                         }
 
-                        let target_node = doc.get_node_mut(target_node_id).unwrap();
-                        let syn_event = target_node.synthetic_click_event_data(event.mods);
-                        handle_click(doc, target_node_id, &syn_event, dispatch_event);
-                        let target_node = &doc.nodes[target_node_id];
-                        if target_node.is_focussable()
-                            && !doc.is_form_control_disabled(target_node_id)
-                        {
-                            generate_focus_events(
-                                doc,
-                                &mut |doc| {
-                                    doc.set_focus_to_with_source(
-                                        target_node_id,
-                                        FocusSource::Pointer,
-                                    );
-                                },
-                                dispatch_event,
-                            );
+                        if !doc.is_form_control_disabled(target_node_id) {
+                            if doc.click_count == 2 {
+                                doc.click_count = 0;
+                            }
+                            let click = doc.nodes[target_node_id].synthetic_click_event(event.mods);
+                            if doc.nodes[target_node_id].is_focussable() {
+                                generate_focus_events(
+                                    doc,
+                                    &mut |doc| {
+                                        doc.set_focus_to_with_source(
+                                            target_node_id,
+                                            FocusSource::Pointer,
+                                        );
+                                    },
+                                    dispatch_event,
+                                );
+                            }
+                            dispatch_event(DomEvent::new(target_node_id, click));
                         }
                         break 'matched;
                     }
@@ -926,7 +928,7 @@ pub(crate) fn handle_click(
 
     // Dispatch double-click event if this is the second click in quick succession
     // (click_count was already computed in handle_mousedown)
-    if doc.click_count == 2 {
+    if is_double_click {
         dispatch_event(DomEvent::new(
             target,
             DomEventData::DoubleClick(double_click_event),
