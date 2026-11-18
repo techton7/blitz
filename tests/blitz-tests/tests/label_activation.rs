@@ -1,4 +1,4 @@
-use blitz_dom::{Document, EventDriver, EventHandler};
+use blitz_dom::{Document, ElementState, EventDriver, EventHandler};
 use blitz_test_harness::{Harness, mouse_pointer_event};
 use blitz_traits::events::{DomEvent, DomEventData, EventState, UiEvent};
 use blitz_traits::node_id::NodeId;
@@ -83,6 +83,17 @@ fn implicit_label_binds_first_labelable_and_guards_interactive_descendants() {
         .label_bound_input_element(harness.node("#implicit"))
         .map(|n| n.id);
     assert_eq!(bound, Some(harness.node("#btn")));
+
+    let (x, y) = harness.center_of("#caption");
+    harness.base_mut().set_hover_to(x, y);
+    assert!(
+        harness
+            .base()
+            .get_node(harness.node("#btn"))
+            .unwrap()
+            .element_state()
+            .contains(ElementState::HOVER)
+    );
 
     harness.click("#caption");
     assert_eq!(harness.focused(), Some(harness.node("#btn")));

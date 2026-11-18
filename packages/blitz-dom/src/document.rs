@@ -2353,10 +2353,8 @@ impl BaseDocument {
         );
         let active_node_id = Some(hover_node_id);
 
-        let node_path = self.maybe_node_element_ancestors(active_node_id);
-        for &id in node_path.iter() {
-            self.snapshot_node_and(id, ElementState::ACTIVE, |node| node.active());
-        }
+        let node_path = self.interaction_state_chain(active_node_id);
+        self.set_interaction_state_difference(&[], &node_path, ElementState::ACTIVE);
 
         self.active_node_id = active_node_id;
 
@@ -2369,12 +2367,8 @@ impl BaseDocument {
         };
 
         let kb_path = self.maybe_node_element_ancestors(self.keyboard_active_node_id);
-        let node_path = self.maybe_node_element_ancestors(Some(active_node_id));
-        for &id in node_path.iter() {
-            if !kb_path.contains(&id) {
-                self.snapshot_node_and(id, ElementState::ACTIVE, |node| node.unactive());
-            }
-        }
+        let node_path = self.interaction_state_chain(Some(active_node_id));
+        self.set_interaction_state_difference(&node_path, &kb_path, ElementState::ACTIVE);
 
         true
     }
@@ -2395,7 +2389,7 @@ impl BaseDocument {
         }
         self.clear_keyboard_active_node();
 
-        let ptr_path = self.maybe_node_element_ancestors(self.active_node_id);
+        let ptr_path = self.interaction_state_chain(self.active_node_id);
         let node_path = self.node_element_ancestors(node_id);
         for &id in node_path.iter() {
             if !ptr_path.contains(&id) {
@@ -2412,7 +2406,7 @@ impl BaseDocument {
     pub fn take_keyboard_active_node(&mut self) -> Option<NodeId> {
         let node_id = self.keyboard_active_node_id.take()?;
         if self.nodes.contains_key(node_id) {
-            let ptr_path = self.maybe_node_element_ancestors(self.active_node_id);
+            let ptr_path = self.interaction_state_chain(self.active_node_id);
             let mut maybe_id = Some(node_id);
             while let Some(node) = maybe_id.and_then(|id| self.get_node(id)) {
                 if !node.is_element() {
@@ -2436,6 +2430,58 @@ impl BaseDocument {
 
     pub fn clear_keyboard_active_node(&mut self) -> bool {
         self.take_keyboard_active_node().is_some()
+    }
+
+    /// Expand an interaction target's element ancestor chain with controls
+    /// bound to labels in that chain. The control's ancestors are deliberately
+    /// excluded because it receives delegated state, rather than hit state.
+    fn interaction_state_chain(&self, node_id: Option<NodeId>) -> Vec<NodeId> {
+        let mut chain = self.maybe_node_element_ancestors(node_id);
+        let mut seen: HashSet<NodeId> = chain.iter().copied().collect();
+        let labels: Vec<NodeId> = chain
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.nodes[id]
+                    .data
+                    .is_element_with_tag_name(&local_name!("label"))
+            })
+            .collect();
+
+        for label in labels {
+            if let Some(control) = self.label_bound_input_element(label)
+                && seen.insert(control.id)
+            {
+                chain.push(control.id);
+            }
+        }
+
+        chain
+    }
+
+    fn set_interaction_state_difference(
+        &mut self,
+        old_chain: &[NodeId],
+        new_chain: &[NodeId],
+        state: ElementState,
+    ) {
+        let old_set: HashSet<NodeId> = old_chain.iter().copied().collect();
+        let new_set: HashSet<NodeId> = new_chain.iter().copied().collect();
+
+        for &id in old_chain.iter().filter(|id| !new_set.contains(id)) {
+            self.snapshot_node_and(id, state, |node| match state {
+                ElementState::HOVER => node.unhover(),
+                ElementState::ACTIVE => node.unactive(),
+                _ => unreachable!("unsupported interaction state"),
+            });
+        }
+        for &id in new_chain.iter().filter(|id| !old_set.contains(id)) {
+            self.snapshot_node_and(id, state, |node| match state {
+                ElementState::HOVER => node.hover(),
+                ElementState::ACTIVE => node.active(),
+                _ => unreachable!("unsupported interaction state"),
+            });
+        }
     }
 
     /// The scrollbar thumb currently under the pointer, if any.
@@ -2553,19 +2599,9 @@ impl BaseDocument {
             return scrollbar_changed;
         }
 
-        let old_node_path = self.maybe_node_element_ancestors(self.hover_node_id);
-        let new_node_path = self.maybe_node_element_ancestors(hover_node_id);
-        let same_count = old_node_path
-            .iter()
-            .zip(&new_node_path)
-            .take_while(|(o, n)| o == n)
-            .count();
-        for &id in old_node_path.iter().skip(same_count) {
-            self.snapshot_node_and(id, ElementState::HOVER, |node| node.unhover());
-        }
-        for &id in new_node_path.iter().skip(same_count) {
-            self.snapshot_node_and(id, ElementState::HOVER, |node| node.hover());
-        }
+        let old_node_path = self.interaction_state_chain(self.hover_node_id);
+        let new_node_path = self.interaction_state_chain(hover_node_id);
+        self.set_interaction_state_difference(&old_node_path, &new_node_path, ElementState::HOVER);
 
         self.hover_node_id = hover_node_id;
 
@@ -2585,10 +2621,8 @@ impl BaseDocument {
             return false;
         };
 
-        let old_node_path = self.maybe_node_element_ancestors(Some(hover_node_id));
-        for &id in old_node_path.iter() {
-            self.snapshot_node_and(id, ElementState::HOVER, |node| node.unhover());
-        }
+        let old_node_path = self.interaction_state_chain(Some(hover_node_id));
+        self.set_interaction_state_difference(&old_node_path, &[], ElementState::HOVER);
 
         self.hover_node_id = None;
         self.hover_node_is_text = false;
@@ -2773,19 +2807,9 @@ impl BaseDocument {
             return scrollbar_changed;
         }
 
-        let old_node_path = self.maybe_node_element_ancestors(self.hover_node_id);
-        let new_node_path = self.maybe_node_element_ancestors(hover_node_id);
-        let same_count = old_node_path
-            .iter()
-            .zip(&new_node_path)
-            .take_while(|(o, n)| o == n)
-            .count();
-        for &id in old_node_path.iter().skip(same_count) {
-            self.snapshot_node_and(id, ElementState::HOVER, |node| node.unhover());
-        }
-        for &id in new_node_path.iter().skip(same_count) {
-            self.snapshot_node_and(id, ElementState::HOVER, |node| node.hover());
-        }
+        let old_node_path = self.interaction_state_chain(self.hover_node_id);
+        let new_node_path = self.interaction_state_chain(hover_node_id);
+        self.set_interaction_state_difference(&old_node_path, &new_node_path, ElementState::HOVER);
 
         self.hover_node_id = hover_node_id;
         self.shell_provider.request_redraw();
