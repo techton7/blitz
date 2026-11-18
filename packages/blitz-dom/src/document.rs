@@ -369,6 +369,10 @@ pub struct BaseDocument {
     // TODO: collapse animating state into a bitflags
     /// Whether there are active CSS animations/transitions (so we should re-render every frame)
     pub(crate) has_active_animations: bool,
+    /// Nodes with CSS animations that still need an animation tick.
+    pub(crate) active_animation_nodes: HashSet<NodeId>,
+    /// Nodes with CSS transitions that still need an animation tick.
+    pub(crate) active_transition_nodes: HashSet<NodeId>,
     /// Whether there is a `<canvas>` element in the DOM (so we should re-render every frame)
     pub(crate) has_canvas: bool,
     /// Whether there are subdocuments that are animating (so we should re-render every frame)
@@ -598,6 +602,8 @@ impl BaseDocument {
             keyboard_active_node_id: None,
             mousedown_node_id: None,
             has_active_animations: false,
+            active_animation_nodes: HashSet::new(),
+            active_transition_nodes: HashSet::new(),
             subdoc_is_animating: false,
             has_canvas: false,
             sub_document_nodes: HashSet::new(),
@@ -2185,6 +2191,49 @@ impl BaseDocument {
             maybe_ancestor = ancestor.parent_node();
         }
         true
+    }
+
+    /// Returns `Some(true)` when this node or one of its ancestors has a resolved
+    /// `display: none` style, `Some(false)` when the full ancestor chain is
+    /// resolved and displayed, and `None` when required styles are unavailable.
+    pub fn node_or_ancestor_has_display_none(&self, node_id: NodeId) -> Option<bool> {
+        let mut node = self.get_node(node_id)?;
+        if !node.flags.is_in_document() {
+            return None;
+        }
+
+        let mut fully_resolved = true;
+        loop {
+            if node
+                .primary_styles()
+                .is_some_and(|styles| styles.clone_display().is_none())
+            {
+                return Some(true);
+            }
+            if node.primary_styles().is_none() {
+                fully_resolved = false;
+            }
+            let Some(parent_id) = node.parent else {
+                return fully_resolved.then_some(false);
+            };
+            let Some(parent) = self.get_node(parent_id) else {
+                return None;
+            };
+            node = parent;
+            if !node.is_element() {
+                return fully_resolved.then_some(false);
+            }
+        }
+    }
+
+    /// Returns whether the node currently has an active CSS keyframe animation.
+    pub fn node_has_active_animations(&self, node_id: NodeId) -> bool {
+        self.active_animation_nodes.contains(&node_id)
+    }
+
+    /// Returns whether the node currently has an active CSS transition.
+    pub fn node_has_active_transitions(&self, node_id: NodeId) -> bool {
+        self.active_transition_nodes.contains(&node_id)
     }
 
     fn is_in_tab_order(&self, node: &Node) -> bool {
