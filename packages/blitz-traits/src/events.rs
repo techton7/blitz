@@ -158,6 +158,9 @@ pub enum DomEventKind {
     FocusIn,
     FocusOut,
 
+    Load,
+    Error,
+
     AppleStandardKeybinding,
 
     AnimationStart,
@@ -221,7 +224,6 @@ impl FromStr for DomEventKind {
             "blur" => Ok(Self::Blur),
             "focusin" => Ok(Self::FocusIn),
             "focusout" => Ok(Self::FocusOut),
-
             "animationstart" => Ok(Self::AnimationStart),
             "animationend" => Ok(Self::AnimationEnd),
             "animationiteration" => Ok(Self::AnimationIteration),
@@ -231,6 +233,8 @@ impl FromStr for DomEventKind {
             "transitionstart" => Ok(Self::TransitionStart),
             "transitionend" => Ok(Self::TransitionEnd),
             "transitioncancel" => Ok(Self::TransitionCancel),
+            "load" => Ok(Self::Load),
+            "error" => Ok(Self::Error),
             _ => Err(()),
         }
     }
@@ -281,6 +285,9 @@ pub enum DomEventData {
     Blur(BlitzFocusEvent),
     FocusIn(BlitzFocusEvent),
     FocusOut(BlitzFocusEvent),
+
+    Load,
+    Error,
 
     AppleStandardKeybinding(SmolStr),
 
@@ -350,6 +357,9 @@ impl DomEventData {
             Self::FocusIn { .. } => "focusin",
             Self::FocusOut { .. } => "focusout",
 
+            Self::Load => "load",
+            Self::Error => "error",
+
             Self::AppleStandardKeybinding { .. } => "applekeybinding",
 
             Self::AnimationStart { .. } => "animationstart",
@@ -408,6 +418,9 @@ impl DomEventData {
             Self::Blur { .. } => DomEventKind::Blur,
             Self::FocusIn { .. } => DomEventKind::FocusIn,
             Self::FocusOut { .. } => DomEventKind::FocusOut,
+
+            Self::Load => DomEventKind::Load,
+            Self::Error => DomEventKind::Error,
 
             Self::AppleStandardKeybinding { .. } => DomEventKind::AppleStandardKeybinding,
 
@@ -468,6 +481,9 @@ impl DomEventData {
             Self::FocusIn { .. } => false,
             Self::FocusOut { .. } => false,
 
+            Self::Load => false,
+            Self::Error => false,
+
             Self::AppleStandardKeybinding { .. } => true,
 
             Self::AnimationStart { .. }
@@ -525,6 +541,9 @@ impl DomEventData {
             Self::Blur { .. } => false,
             Self::FocusIn { .. } => true,
             Self::FocusOut { .. } => true,
+
+            Self::Load => false,
+            Self::Error => false,
 
             Self::AppleStandardKeybinding { .. } => false,
 

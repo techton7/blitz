@@ -422,6 +422,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     }
 
     pub fn handle_ui_event(&mut self, event: UiEvent) {
+        self.flush_pending_events();
         let (hover_node_id, focussed_node_id, prev_hover) = {
             let doc = self.doc.inner();
             (doc.hover_node_id, doc.focus_node_id, doc.hover_state())
@@ -694,6 +695,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
 
     /// Flush and dispatch all pending animation and transition events queued on the document.
     pub fn flush_animation_events(&mut self) {
+        self.flush_pending_events();
         let events = {
             let mut doc = self.doc.inner_mut();
             std::mem::take(&mut doc.pending_animation_events)
@@ -705,6 +707,22 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             let dom_event = DomEvent::new(queued.node_id, queued.event);
             self.handle_dom_event(dom_event);
         }
+    }
+
+    pub fn flush_pending_events(&mut self) {
+        const MAX_EVENTS_PER_FLUSH: usize = 1024;
+
+        for _ in 0..MAX_EVENTS_PER_FLUSH {
+            let Some(event) = self.doc.inner_mut().pop_pending_event() else {
+                return;
+            };
+            self.handle_dom_event(event);
+        }
+
+        #[cfg(feature = "tracing")]
+        tracing::warn!(
+            "Stopped dispatching events after {MAX_EVENTS_PER_FLUSH}: handlers keep queueing more"
+        );
     }
 
     pub fn handle_dom_event(&mut self, event: DomEvent) {

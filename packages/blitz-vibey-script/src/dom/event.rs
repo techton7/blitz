@@ -287,6 +287,8 @@ pub(crate) fn create_event_for_dom_event(
             define_value(&event, "inputType", js_str("insertText"), context);
         }
 
+        DomEventData::Load | DomEventData::Error => {}
+
         _ => {}
     }
 

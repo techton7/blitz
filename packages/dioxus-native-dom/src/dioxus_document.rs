@@ -2,8 +2,8 @@
 use crate::NodeId;
 use crate::events::{
     BlitzKeyboardData, NativeAnimationData, NativeConverter, NativeFocusData, NativeFormData,
-    NativePointerData, NativeScrollData, NativeTouchData, NativeTransitionData, NativeWheelData,
-    NodeHandle,
+    NativeImageData, NativePointerData, NativeScrollData, NativeTouchData, NativeTransitionData,
+    NativeWheelData, NodeHandle,
 };
 use crate::mutation_writer::DioxusState;
 use crate::qual_name;
@@ -358,6 +358,8 @@ impl EventHandler for DioxusEventHandler<'_> {
                     values: vec![],
                 }))
             }
+            DomEventData::Load => Some(wrap_event_data(NativeImageData::new(false))),
+            DomEventData::Error => Some(wrap_event_data(NativeImageData::new(true))),
 
             // TODO: Implement IME handling
             DomEventData::Ime(_) => None,

@@ -98,7 +98,6 @@ fn map_dom_event_to_ui_event(
         DomEventData::Blur(_) => None,
         DomEventData::FocusIn(_) => None,
         DomEventData::FocusOut(_) => None,
-
         DomEventData::AnimationStart(_)
         | DomEventData::AnimationEnd(_)
         | DomEventData::AnimationIteration(_)
@@ -107,6 +106,8 @@ fn map_dom_event_to_ui_event(
         | DomEventData::TransitionStart(_)
         | DomEventData::TransitionEnd(_)
         | DomEventData::TransitionCancel(_) => None,
+        DomEventData::Load => None,
+        DomEventData::Error => None,
     }
 }
 
@@ -283,6 +284,9 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
             // Do nothing (no default action)
         }
         DomEventData::PointerOver(_) => {
+            // Do nothing (no default action)
+        }
+        DomEventData::Load | DomEventData::Error => {
             // Do nothing (no default action)
         }
         DomEventData::PointerOut(_) => {

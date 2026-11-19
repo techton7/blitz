@@ -2,7 +2,7 @@ use crate::NodeTree;
 use crate::events::{DragMode, handle_dom_event};
 use crate::layout::construct::ConstructionTask;
 use crate::layout::damage::ALL_DAMAGE;
-use crate::mutator::ViewportMut;
+use crate::mutator::{ViewportMut, is_data_url};
 use crate::net::{
     ImageHandler, Resource, ResourceHandler, ResourceLoadResponse, StylesheetHandler,
     StylesheetLoader,
@@ -23,8 +23,8 @@ use crate::{
 use bitflags::bitflags;
 use blitz_traits::devtools::DevtoolSettings;
 use blitz_traits::events::{
-    BlitzImeEvent, BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, DomEvent, HitResult,
-    MouseEventButtons, PointerCaptureError, UiEvent,
+    BlitzImeEvent, BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData,
+    HitResult, MouseEventButtons, PointerCaptureError, UiEvent,
 };
 use blitz_traits::navigation::{DummyNavigationProvider, NavigationProvider};
 use blitz_traits::net::{AbortSignal, DummyNetProvider, NetProvider, Request};
@@ -33,13 +33,13 @@ use blitz_traits::shell::{DummyShellProvider, ShellProvider, Viewport};
 use cursor_icon::CursorIcon;
 use keyboard_types::{Key, Modifiers, NamedKey};
 use linebender_resource_handle::Blob;
-use markup5ever::{LocalName, local_name};
+use markup5ever::{LocalName, local_name, ns};
 use parley::{FontContext, PlainEditorDriver};
 use selectors::matching::QuirksMode;
 use smallvec::SmallVec;
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, Bound, HashMap, HashSet};
+use std::collections::{BTreeMap, Bound, HashMap, HashSet, VecDeque};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -424,6 +424,8 @@ pub struct BaseDocument {
     /// Pending CSS animation and transition events queued during style resolution
     #[allow(dead_code)]
     pub pending_animation_events: Vec<QueuedAnimationEvent>,
+    /// Events generated outside the current driver dispatch, such as resource completions.
+    pub(crate) pending_events: VecDeque<DomEvent>,
     pub(crate) completed_zero_duration_animations: HashSet<(NodeId, String)>,
 
     // Tracks in-flight "critical" resources (e.g. stylesheets linked from the `<head>`),
@@ -620,6 +622,7 @@ impl BaseDocument {
             pending_images: HashMap::new(),
             pending_style_image_nodes: Vec::new(),
             pending_animation_events: Vec::new(),
+            pending_events: VecDeque::new(),
             completed_zero_duration_animations: HashSet::new(),
             pending_critical_resources: HashSet::new(),
             controls_to_form: HashMap::new(),
@@ -827,6 +830,31 @@ impl BaseDocument {
         dispatch_event: F,
     ) {
         handle_dom_event(self, event, dispatch_event)
+    }
+
+    pub fn queue_event(&mut self, event: DomEvent) {
+        const MAX_PENDING_EVENTS: usize = 1024;
+        if self.pending_events.len() >= MAX_PENDING_EVENTS {
+            self.pending_events.pop_front();
+        }
+        self.pending_events.push_back(event);
+    }
+
+    pub(crate) fn queue_ua_event(&mut self, target: NodeId, data: DomEventData) {
+        self.queue_event(DomEvent::new(target, data));
+    }
+
+    pub fn pop_pending_event(&mut self) -> Option<DomEvent> {
+        loop {
+            let event = self.pending_events.pop_front()?;
+            if self.nodes.contains_key(event.target) {
+                return Some(event);
+            }
+        }
+    }
+
+    pub fn has_pending_events(&self) -> bool {
+        !self.pending_events.is_empty()
     }
 
     /// Flush and dispatch any pending animation and transition events using lock-free `std::mem::take`.
@@ -1550,7 +1578,22 @@ impl BaseDocument {
                         "Resource load failed"
                     );
                     #[cfg(not(feature = "tracing"))]
-                    let _ = (waiting_nodes, err);
+                    let _ = err;
+                    for (node_id, image_type) in waiting_nodes {
+                        if image_type == ImageType::Image
+                            && self.get_node(node_id).is_some_and(|node| {
+                                node.element_data().is_some_and(|element| {
+                                    element.name.ns == ns!(html)
+                                        && element.name.local == local_name!("img")
+                                })
+                            })
+                            && self
+                                .resolved_image_src(node_id)
+                                .is_some_and(|src| src.as_str() == url)
+                        {
+                            self.queue_ua_event(node_id, DomEventData::Error);
+                        }
+                    }
                 } else {
                     #[cfg(feature = "tracing")]
                     tracing::warn!(error = err.as_str(), "Resource load failed (no url)");
@@ -1664,12 +1707,21 @@ impl BaseDocument {
 
         // Apply to all waiting nodes
         for (node_id, image_type) in waiting_nodes {
+            let is_current = self
+                .resolved_image_src(node_id)
+                .is_some_and(|src| src.as_str() == url);
             let Some(node) = self.get_node_mut(node_id) else {
                 continue;
             };
 
             match image_type {
                 ImageType::Image => {
+                    if !is_current {
+                        continue;
+                    }
+                    let is_html_image = node.element_data().is_some_and(|element| {
+                        element.name.local == local_name!("img") && element.name.ns == ns!(html)
+                    });
                     let element = node.element_data_mut().unwrap();
                     #[cfg(feature = "custom-widget")]
                     if element.custom_widget_data().is_some() {
@@ -1680,7 +1732,11 @@ impl BaseDocument {
                     // Clear layout cache
                     node.clear_layout_cache();
                     node.insert_damage(ALL_DAMAGE);
+                    if is_html_image {
+                        self.queue_ua_event(node_id, DomEventData::Load);
+                    }
                 }
+
                 ImageType::Background(idx) | ImageType::Mask(idx) => {
                     let layer_image = node.element_data_mut().and_then(|el| {
                         let images = match image_type {
@@ -1697,6 +1753,18 @@ impl BaseDocument {
                 }
             }
         }
+    }
+
+    fn resolved_image_src(&self, node_id: NodeId) -> Option<url::Url> {
+        let element = self.get_node(node_id)?.element_data()?;
+        let src = if element.name.ns == ns!(svg) {
+            element
+                .svg_href()
+                .filter(|href| !href.starts_with('#') && !is_data_url(href))?
+        } else {
+            element.attr(local_name!("src"))?
+        };
+        self.resolve_url(src)
     }
 
     /// Snapshot the node's pre-mutation state (element state and attributes) ahead of
