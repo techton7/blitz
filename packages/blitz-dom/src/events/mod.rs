@@ -1,19 +1,23 @@
 mod driver;
-mod focus;
 mod ime;
 mod keyboard;
 mod pointer;
+mod wheel;
 
 use crate::util::Point;
 use blitz_traits::events::{DomEvent, DomEventData, PointerCoords, UiEvent};
 pub use driver::{EventDriver, EventHandler, NoopEventHandler};
-use focus::generate_focus_events;
 pub(crate) use ime::handle_ime_event;
 use keyboard::{KeyboardOrTextInputEvent, handle_key_or_input_event, handle_keyup_event};
 pub(crate) use pointer::DragMode;
-use pointer::{handle_click, handle_pointerdown, handle_pointermove, handle_pointerup};
+use pointer::{
+    handle_click, handle_pointerdown, handle_pointermove, handle_pointerup, record_pointerdown,
+};
+pub(crate) use wheel::WheelGesture;
 
-use crate::{BaseDocument, FocusSource, events::pointer::handle_wheel};
+use wheel::handle_wheel;
+
+use crate::{BaseDocument, FocusSource};
 
 fn adjust_coords_for_subdocument(
     coords: &mut PointerCoords,
@@ -111,12 +115,41 @@ fn map_dom_event_to_ui_event(
     }
 }
 
-pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
+pub(crate) fn handle_dom_event(
     doc: &mut BaseDocument,
     event: &mut DomEvent,
-    mut dispatch_event: F,
+    default_prevented: bool,
 ) {
     let pending_click_target = doc.pending_click_target.take();
+
+    if default_prevented {
+        // What the document still has to do with an event whose default action was
+        // prevented: follow the input, without applying its effects.
+        match &event.data {
+            // A scroll gesture has to see each of its events to know where it starts and ends.
+            DomEventData::Wheel(data) => {
+                doc.wheel_gesture.track(data);
+            }
+            // The pointer has pressed or lifted whether or not the page wanted the default
+            // action.
+            DomEventData::PointerDown(data) => {
+                record_pointerdown(doc, data.page_x(), data.page_y());
+            }
+            DomEventData::PointerUp(data) => {
+                let click_target = pending_click_target.unwrap_or(Some(event.target));
+                handle_pointerup(doc, event.target, click_target, data, true);
+            }
+            // A prevented key release still disarms an active Space key press
+            DomEventData::KeyUp(data)
+                if matches!(&data.key, keyboard_types::Key::Character(s) if s == " ") =>
+            {
+                doc.clear_keyboard_active_node();
+            }
+            _ => {}
+        }
+        return;
+    }
+
     let target_node_id = event.target;
     let Some(node) = doc.nodes.get_mut(target_node_id) else {
         if let DomEventData::PointerUp(event) = &event.data {
@@ -125,7 +158,7 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
                 target_node_id,
                 pending_click_target.flatten(),
                 event,
-                dispatch_event,
+                false,
             );
         }
         return;
@@ -137,7 +170,7 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
                 target_node_id,
                 pending_click_target.flatten(),
                 event,
-                dispatch_event,
+                false,
             );
         }
         return;
@@ -172,13 +205,7 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
         }
 
         if set_focus {
-            generate_focus_events(
-                doc,
-                &mut |doc| {
-                    doc.set_focus_to_with_source(target_node_id, FocusSource::Pointer);
-                },
-                &mut dispatch_event,
-            );
+            doc.set_focus_to_with_source(target_node_id, FocusSource::Pointer);
         }
 
         return;
@@ -202,13 +229,7 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
         }
 
         if set_focus {
-            generate_focus_events(
-                doc,
-                &mut |doc| {
-                    doc.set_focus_to_with_source(target_node_id, FocusSource::Pointer);
-                },
-                &mut dispatch_event,
-            );
+            doc.set_focus_to_with_source(target_node_id, FocusSource::Pointer);
         }
 
         return;
@@ -216,7 +237,7 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
 
     match &event.data {
         DomEventData::PointerMove(event) => {
-            let changed = handle_pointermove(doc, target_node_id, event, dispatch_event);
+            let changed = handle_pointermove(doc, target_node_id, event);
             if changed {
                 doc.shell_provider.request_redraw();
             }
@@ -225,14 +246,15 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
             // Do nothing (handled in PointerMove)
         }
         DomEventData::PointerDown(event) => {
-            handle_pointerdown(doc, target_node_id, event, &mut dispatch_event);
+            record_pointerdown(doc, event.page_x(), event.page_y());
+            handle_pointerdown(doc, target_node_id, event);
         }
         DomEventData::MouseDown(_) => {
             // Do nothing (handled in PointerDown)
         }
         DomEventData::PointerUp(event) => {
             let click_target = pending_click_target.unwrap_or(Some(target_node_id));
-            handle_pointerup(doc, target_node_id, click_target, event, dispatch_event);
+            handle_pointerup(doc, target_node_id, click_target, event, false);
         }
         DomEventData::MouseUp(_) => {
             // Do nothing (handled in PointerUp)
@@ -241,32 +263,30 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
             // Do nothing (active state is reset in the event driver)
         }
         DomEventData::Click(event) => {
-            handle_click(doc, target_node_id, event, &mut dispatch_event);
+            handle_click(doc, target_node_id, event);
         }
         DomEventData::KeyDown(event) => {
             handle_key_or_input_event(
                 doc,
                 target_node_id,
                 KeyboardOrTextInputEvent::KeyPress(event.clone()),
-                dispatch_event,
             );
         }
         DomEventData::KeyPress(_) => {
             // Do nothing (no default action)
         }
         DomEventData::KeyUp(event) => {
-            handle_keyup_event(doc, target_node_id, &event.clone(), dispatch_event);
+            handle_keyup_event(doc, target_node_id, &event.clone());
         }
         DomEventData::AppleStandardKeybinding(event) => {
             handle_key_or_input_event(
                 doc,
                 target_node_id,
                 KeyboardOrTextInputEvent::AppleStandardKeyBinding(event.clone()),
-                dispatch_event,
             );
         }
         DomEventData::Ime(event) => {
-            handle_ime_event(doc, event.clone(), dispatch_event);
+            handle_ime_event(doc, event.clone());
         }
         DomEventData::Input(_) | DomEventData::Change(_) => {
             // Do nothing (no default action)
@@ -326,7 +346,7 @@ pub(crate) fn handle_dom_event<F: FnMut(DomEvent)>(
             // Handled elsewhere
         }
         DomEventData::Wheel(event) => {
-            handle_wheel(doc, target_node_id, event.clone(), dispatch_event);
+            handle_wheel(doc, target_node_id, event.clone());
         }
         DomEventData::Focus(_) => {
             // Do nothing (no default action)

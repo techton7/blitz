@@ -2,11 +2,10 @@ use crate::Document;
 use crate::document::{ActivePointerRecord, CaptureTarget};
 use crate::events::DragMode;
 use blitz_traits::events::{
-    BlitzPointerEvent, DomEvent, DomEventData, EventState, MouseEventButtons, Point, PointerCoords,
-    UiEvent,
+    BlitzPointerEvent, DomEvent, DomEventData, EventDispatchSource, EventState, MouseEventButtons,
+    Point, PointerCoords, UiEvent,
 };
 use blitz_traits::node_id::NodeId;
-use std::collections::VecDeque;
 
 pub trait EventHandler {
     fn handle_event(
@@ -34,16 +33,11 @@ impl EventHandler for NoopEventHandler {
 pub struct EventDriver<'doc, Handler: EventHandler> {
     doc: &'doc mut dyn Document,
     handler: Handler,
-    queue: VecDeque<DomEvent>,
 }
 
 impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     pub fn new(doc: &'doc mut dyn Document, handler: Handler) -> Self {
-        EventDriver {
-            doc,
-            handler,
-            queue: VecDeque::with_capacity(4),
-        }
+        EventDriver { doc, handler }
     }
 
     pub fn handle_pointer_move(&mut self, event: &BlitzPointerEvent) -> Option<NodeId> {
@@ -218,6 +212,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             self.handle_dom_event(DomEvent::new(
                 lost_target,
                 DomEventData::LostPointerCapture(event.clone()),
+                EventDispatchSource::UserAgent,
             ));
         }
 
@@ -257,6 +252,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         self.handle_dom_event(DomEvent::new(
             captured.target,
             DomEventData::GotPointerCapture(event.clone()),
+            EventDispatchSource::UserAgent,
         ));
 
         let disconnected_during_got = {
@@ -277,6 +273,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             self.handle_dom_event(DomEvent::new(
                 root_node_id,
                 DomEventData::LostPointerCapture(event.clone()),
+                EventDispatchSource::UserAgent,
             ));
         }
     }
@@ -355,9 +352,14 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             self.handle_dom_event(DomEvent::new(
                 target,
                 DomEventData::PointerOut(event.clone()),
+                EventDispatchSource::Input,
             ));
             if is_mouse {
-                self.handle_dom_event(DomEvent::new(target, DomEventData::MouseOut(event.clone())));
+                self.handle_dom_event(DomEvent::new(
+                    target,
+                    DomEventData::MouseOut(event.clone()),
+                    EventDispatchSource::Input,
+                ));
             }
 
             // Send an mouseleave event to all old elements on the chain
@@ -372,11 +374,13 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                 self.handle_dom_event(DomEvent::new(
                     *node_id,
                     DomEventData::PointerLeave(event.clone()),
+                    EventDispatchSource::Input,
                 ));
                 if is_mouse {
                     self.handle_dom_event(DomEvent::new(
                         *node_id,
                         DomEventData::MouseLeave(event.clone()),
+                        EventDispatchSource::Input,
                     ));
                 }
             }
@@ -388,12 +392,14 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             self.handle_dom_event(DomEvent::new(
                 target,
                 DomEventData::PointerOver(event.clone()),
+                EventDispatchSource::Input,
             ));
 
             if is_mouse {
                 self.handle_dom_event(DomEvent::new(
                     target,
                     DomEventData::MouseOver(event.clone()),
+                    EventDispatchSource::Input,
                 ));
             }
 
@@ -409,12 +415,14 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                 self.handle_dom_event(DomEvent::new(
                     *node_id,
                     DomEventData::PointerEnter(event.clone()),
+                    EventDispatchSource::Input,
                 ));
 
                 if is_mouse {
                     self.handle_dom_event(DomEvent::new(
                         *node_id,
                         DomEventData::MouseEnter(event.clone()),
+                        EventDispatchSource::Input,
                     ));
                 }
             }
@@ -422,6 +430,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     }
 
     pub fn handle_ui_event(&mut self, event: UiEvent) {
+        // Events queued on the document since a driver last ran come before the new event
         self.flush_pending_events();
         let (hover_node_id, focussed_node_id, prev_hover) = {
             let doc = self.doc.inner();
@@ -521,19 +530,28 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                     self.doc.inner_mut().unactive_node();
 
                     if let Some(target) = self.resolve_target_or_root(effective_target) {
-                        let mut ptr_event =
-                            DomEvent::new(target, DomEventData::PointerUp(data.clone()));
+                        let mut ptr_event = DomEvent::new(
+                            target,
+                            DomEventData::PointerUp(data.clone()),
+                            EventDispatchSource::Input,
+                        );
                         let mut event_state =
                             self.run_handler_event(&mut ptr_event, EventState::default());
 
                         if !event_state.is_cancelled() {
                             if data.is_mouse() {
-                                let mut mouse_event =
-                                    DomEvent::new(target, DomEventData::MouseUp(data.clone()));
+                                let mut mouse_event = DomEvent::new(
+                                    target,
+                                    DomEventData::MouseUp(data.clone()),
+                                    EventDispatchSource::Input,
+                                );
                                 event_state = self.run_handler_event(&mut mouse_event, event_state);
                             } else if data.is_finger() || data.is_pen() {
-                                let mut touch_event =
-                                    DomEvent::new(target, DomEventData::TouchEnd(data.clone()));
+                                let mut touch_event = DomEvent::new(
+                                    target,
+                                    DomEventData::TouchEnd(data.clone()),
+                                    EventDispatchSource::Input,
+                                );
                                 event_state = self.run_handler_event(&mut touch_event, event_state);
                             }
                         }
@@ -569,14 +587,8 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                             doc.pending_click_target = Some(click_target);
                         }
 
-                        if !event_state.is_cancelled() {
-                            self.run_default_action(&mut ptr_event);
-                        } else {
-                            let mut doc = self.doc.inner_mut();
-                            doc.pending_click_target = None;
-                            doc.drag_mode.take();
-                        }
-                        self.process_queue();
+                        self.run_default_action(&mut ptr_event, event_state.is_cancelled());
+                        self.flush_pending_events();
                     } else {
                         self.doc
                             .inner_mut()
@@ -642,12 +654,20 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             }
             UiEvent::Wheel(data) => {
                 if let Some(target) = self.resolve_target_or_root(hover_node_id) {
-                    self.handle_dom_event(DomEvent::new(target, DomEventData::Wheel(data)));
+                    self.handle_dom_event(DomEvent::new(
+                        target,
+                        DomEventData::Wheel(data),
+                        EventDispatchSource::Input,
+                    ));
                 }
             }
             UiEvent::KeyUp(data) => {
                 if let Some(target) = self.resolve_target_or_root(focussed_node_id) {
-                    self.handle_dom_event(DomEvent::new(target, DomEventData::KeyUp(data)));
+                    self.handle_dom_event(DomEvent::new(
+                        target,
+                        DomEventData::KeyUp(data),
+                        EventDispatchSource::Input,
+                    ));
                 }
             }
             UiEvent::KeyDown(data) => {
@@ -656,13 +676,21 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                 }
                 self.doc.inner_mut().note_keydown_modality(&data);
                 if let Some(target) = self.resolve_target_or_root(focussed_node_id) {
-                    self.handle_dom_event(DomEvent::new(target, DomEventData::KeyDown(data)));
+                    self.handle_dom_event(DomEvent::new(
+                        target,
+                        DomEventData::KeyDown(data),
+                        EventDispatchSource::Input,
+                    ));
                 }
             }
             UiEvent::Ime(data) => {
                 self.doc.inner_mut().note_ime_modality(&data);
                 if let Some(target) = self.resolve_target_or_root(focussed_node_id) {
-                    self.handle_dom_event(DomEvent::new(target, DomEventData::Ime(data)));
+                    self.handle_dom_event(DomEvent::new(
+                        target,
+                        DomEventData::Ime(data),
+                        EventDispatchSource::Input,
+                    ));
                 }
             }
             UiEvent::Paste(text) => {
@@ -670,17 +698,19 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                     super::ime::handle_ime_event(
                         &mut self.doc.inner_mut(),
                         blitz_traits::events::BlitzImeEvent::Commit(text),
-                        |event| self.queue.push_back(event),
                     );
-                    self.process_queue();
+                    self.flush_pending_events();
                 }
             }
             UiEvent::AppleStandardKeybinding(data) => {
                 if let Some(target) = self.resolve_target_or_root(focussed_node_id) {
-                    let mut dom_event =
-                        DomEvent::new(target, DomEventData::AppleStandardKeybinding(data));
-                    self.run_default_action(&mut dom_event);
-                    self.process_queue();
+                    let mut dom_event = DomEvent::new(
+                        target,
+                        DomEventData::AppleStandardKeybinding(data),
+                        EventDispatchSource::Input,
+                    );
+                    self.run_default_action(&mut dom_event, false);
+                    self.flush_pending_events();
                 }
             }
         }
@@ -704,30 +734,18 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             if self.doc.inner().get_node(queued.node_id).is_none() {
                 continue;
             }
-            let dom_event = DomEvent::new(queued.node_id, queued.event);
+            let dom_event = DomEvent::new(
+                queued.node_id,
+                queued.event,
+                EventDispatchSource::UserAgent,
+            );
             self.handle_dom_event(dom_event);
         }
     }
 
-    pub fn flush_pending_events(&mut self) {
-        const MAX_EVENTS_PER_FLUSH: usize = 1024;
-
-        for _ in 0..MAX_EVENTS_PER_FLUSH {
-            let Some(event) = self.doc.inner_mut().pop_pending_event() else {
-                return;
-            };
-            self.handle_dom_event(event);
-        }
-
-        #[cfg(feature = "tracing")]
-        tracing::warn!(
-            "Stopped dispatching events after {MAX_EVENTS_PER_FLUSH}: handlers keep queueing more"
-        );
-    }
-
     pub fn handle_dom_event(&mut self, event: DomEvent) {
-        self.queue.push_back(event);
-        self.process_queue();
+        self.doc.inner_mut().queue_event(event);
+        self.flush_pending_events();
     }
 
     fn handle_pointer_event(
@@ -738,7 +756,11 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         make_mouse_data: Option<impl FnOnce(BlitzPointerEvent) -> DomEventData>,
         make_touch_data: impl FnOnce(BlitzPointerEvent) -> DomEventData,
     ) {
-        let mut ptr_event = DomEvent::new(target, make_ptr_data(data.clone()));
+        let mut ptr_event = DomEvent::new(
+            target,
+            make_ptr_data(data.clone()),
+            EventDispatchSource::Input,
+        );
         let mut event_state = EventState::default();
         event_state = self.run_handler_event(&mut ptr_event, event_state);
 
@@ -752,32 +774,115 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         if !event_state.is_cancelled() {
             if data.is_mouse() {
                 if let Some(make_mouse_data) = make_mouse_data {
-                    let mut mouse_event = DomEvent::new(target, make_mouse_data(data));
+                    let mut mouse_event = DomEvent::new(
+                        target,
+                        make_mouse_data(data),
+                        EventDispatchSource::Input,
+                    );
                     event_state = self.run_handler_event(&mut mouse_event, event_state);
                 }
             } else if data.is_finger() || data.is_pen() {
-                let mut touch_event = DomEvent::new(target, make_touch_data(data));
+                let mut touch_event = DomEvent::new(
+                    target,
+                    make_touch_data(data),
+                    EventDispatchSource::Input,
+                );
                 event_state = self.run_handler_event(&mut touch_event, event_state);
             }
         }
 
-        if !event_state.is_cancelled() {
-            self.run_default_action(&mut ptr_event);
-        }
-        self.process_queue();
+        self.run_default_action(&mut ptr_event, event_state.is_cancelled());
+        self.flush_pending_events();
     }
 
-    fn process_queue(&mut self) {
-        while let Some(mut event) = self.queue.pop_front() {
-            let event_state = self.run_handler_event(&mut event, EventState::default());
-            if !event_state.is_cancelled() {
-                self.run_default_action(&mut event);
-            } else if let DomEventData::KeyUp(ref key_event) = event.data
-                && matches!(&key_event.key, keyboard_types::Key::Character(s) if s == " ")
-            {
-                self.doc.inner_mut().clear_keyboard_active_node();
+    /// Dispatch a pointer event that comes from user input, along with its compatibility
+    /// event, and then run its default action.
+    fn dispatch_input_pointer_event(&mut self, mut ptr_event: DomEvent) {
+        type MakeData = fn(BlitzPointerEvent) -> DomEventData;
+        let (data, make_mouse_data, make_touch_data): (_, Option<MakeData>, MakeData) =
+            match &ptr_event.data {
+                DomEventData::PointerMove(data) => (
+                    data.clone(),
+                    Some(DomEventData::MouseMove),
+                    DomEventData::TouchMove,
+                ),
+                DomEventData::PointerDown(data) => (
+                    data.clone(),
+                    Some(DomEventData::MouseDown),
+                    DomEventData::TouchStart,
+                ),
+                DomEventData::PointerUp(data) => (
+                    data.clone(),
+                    Some(DomEventData::MouseUp),
+                    DomEventData::TouchEnd,
+                ),
+                // `pointercancel` has no mouse-compatibility event, but does generate a
+                // `touchcancel` for touch-like inputs.
+                DomEventData::PointerCancel(data) => {
+                    (data.clone(), None, DomEventData::TouchCancel)
+                }
+                _ => return self.dispatch_event(ptr_event),
+            };
+        let target = ptr_event.target;
+
+        let mut event_state = EventState::default();
+        event_state = self.run_handler_event(&mut ptr_event, event_state);
+
+        // Generate the corresponding compatibility event (mouse events for the
+        // mouse, touch events for fingers and pen/stylus input) and expose it to
+        // script. The default action is always run on the pointer event, after the
+        // compatibility event's handlers (which can also prevent it), so that the
+        // shell layer and default actions remain pointer-based.
+        if !event_state.is_cancelled() {
+            if data.is_mouse() {
+                if let Some(make_mouse_data) = make_mouse_data {
+                    let mut mouse_event =
+                        DomEvent::new(target, make_mouse_data(data), EventDispatchSource::Input);
+                    event_state = self.run_handler_event(&mut mouse_event, event_state);
+                }
+            } else if data.is_finger() || data.is_pen() {
+                let mut touch_event =
+                    DomEvent::new(target, make_touch_data(data), EventDispatchSource::Input);
+                event_state = self.run_handler_event(&mut touch_event, event_state);
             }
         }
+
+        self.run_default_action(&mut ptr_event, event_state.is_cancelled());
+    }
+
+    fn dispatch_event(&mut self, mut event: DomEvent) {
+        let event_state = self.run_handler_event(&mut event, EventState::default());
+        self.run_default_action(&mut event, event_state.is_cancelled());
+    }
+
+    /// Dispatch the events queued on the document (see [`BaseDocument::queue_event`]) until
+    /// none are left. Each event is handed to its handlers and then to the document, either
+    /// of which may queue further events.
+    ///
+    /// Handlers that keep queueing events (e.g. two focus handlers which each focus the
+    /// other's node) would otherwise never let this return, so it stops after
+    /// `MAX_EVENTS_PER_FLUSH` events and leaves the rest queued for the next flush.
+    ///
+    /// [`BaseDocument::queue_event`]: crate::BaseDocument::queue_event
+    pub fn flush_pending_events(&mut self) {
+        const MAX_EVENTS_PER_FLUSH: usize = 1024;
+
+        for _ in 0..MAX_EVENTS_PER_FLUSH {
+            let Some(event) = self.doc.inner_mut().pop_pending_event() else {
+                return;
+            };
+            match event.source {
+                EventDispatchSource::Input => self.dispatch_input_pointer_event(event),
+                EventDispatchSource::UserAgent | EventDispatchSource::Script => {
+                    self.dispatch_event(event)
+                }
+            }
+        }
+
+        #[cfg(feature = "tracing")]
+        tracing::warn!(
+            "Stopped dispatching events after {MAX_EVENTS_PER_FLUSH}: handlers keep queueing more"
+        );
     }
 
     fn adjust_element_coords(
@@ -857,8 +962,12 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         event_state
     }
 
-    fn run_default_action(&mut self, event: &mut DomEvent) {
-        let mut doc = self.doc.inner_mut();
-        doc.handle_dom_event(event, |new_evt| self.queue.push_back(new_evt));
+    /// Hand an event to the document once its handlers have run. This happens for every
+    /// event, including one whose default action was prevented: the document decides what,
+    /// if anything, it still has to do with it.
+    fn run_default_action(&mut self, event: &mut DomEvent, default_prevented: bool) {
+        self.doc
+            .inner_mut()
+            .handle_dom_event(event, default_prevented);
     }
 }

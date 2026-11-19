@@ -1,7 +1,7 @@
 //! Scrolling: user-initiated (interactive) and programmatic scrolling of nodes and the
 //! viewport, and the scroll animations (smooth scrolls and flings) which drive them.
 
-use blitz_traits::events::{BlitzScrollEvent, DomEvent, DomEventData};
+use blitz_traits::events::{BlitzScrollEvent, DomEventData};
 use blitz_traits::node_id::NodeId;
 use style::properties::generated::longhands::position::computed_value::T as Position;
 use style::values::computed::Overflow;
@@ -132,6 +132,20 @@ pub(crate) struct ScrollToState {
     pub(crate) duration: f64,
 }
 
+impl ScrollToState {
+    fn progress(&self) -> f64 {
+        let time_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64 as f64;
+        if self.duration <= 0.0 {
+            1.0
+        } else {
+            ((time_ms - self.start_time) / self.duration).clamp(0.0, 1.0)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ScrollAnimationState {
     None,
@@ -203,20 +217,24 @@ impl BaseDocument {
     pub(crate) fn clamp_scroll_animation(&mut self) {
         if let ScrollAnimationState::ScrollTo(state) = &self.scroll_animation {
             let state = state.clone();
-            let (_, min, max) = self.scroll_state(state.target, true);
-            let start = Point {
-                x: state.start.x.clamp(min.x, max.x),
-                y: state.start.y.clamp(min.y, max.y),
-            };
+            let (current, min, max) = self.scroll_state(state.target, true);
             let end = Point {
                 x: state.end.x.clamp(min.x, max.x),
                 y: state.end.y.clamp(min.y, max.y),
             };
-            if start == end {
+            if current == end || state.start == end {
                 self.scroll_animation = ScrollAnimationState::None;
-            } else if let ScrollAnimationState::ScrollTo(state) = &mut self.scroll_animation {
-                state.start = start;
-                state.end = end;
+            } else if end != state.end {
+                let eased = ease_in_out_cubic(state.progress());
+                if eased >= 1.0 {
+                    self.scroll_animation = ScrollAnimationState::None;
+                } else if let ScrollAnimationState::ScrollTo(state) = &mut self.scroll_animation {
+                    state.start = Point {
+                        x: (current.x - end.x * eased) / (1.0 - eased),
+                        y: (current.y - end.y * eased) / (1.0 - eased),
+                    };
+                    state.end = end;
+                }
             }
         }
     }
@@ -226,11 +244,7 @@ impl BaseDocument {
     /// This is the single scrolling primitive: user-initiated scrolls
     /// ([`BaseDocument::scroll_chain_by`]) and programmatic scrolls
     /// ([`BaseDocument::scroll_to`]) differ only in the [`ScrollRequest`] they build.
-    pub(crate) fn scroll(
-        &mut self,
-        request: ScrollRequest,
-        dispatch_event: &mut dyn FnMut(DomEvent),
-    ) -> bool {
+    pub(crate) fn scroll(&mut self, request: ScrollRequest) -> bool {
         if request.interrupt_animation
             && matches!(self.scroll_animation, ScrollAnimationState::ScrollTo(_))
         {
@@ -244,9 +258,7 @@ impl BaseDocument {
         if let (ScrollTarget::Node(node_id), ScrollAmount::By(delta), ScrollOverflow::Chain) =
             (target, request.amount, request.overflow)
         {
-            if let Some(has_changed) =
-                self.scroll_inner_content_by(node_id, delta, request, dispatch_event)
-            {
+            if let Some(has_changed) = self.scroll_inner_content_by(node_id, delta, request) {
                 return has_changed;
             }
         }
@@ -270,13 +282,14 @@ impl BaseDocument {
             return end != current;
         }
 
-        let has_changed = self.write_scroll_offset(target, end, dispatch_event);
+        let has_changed = self.write_scroll_offset(target, end);
 
         // Transfer the delta the target could not consume to the next scroller in the chain.
         if request.overflow == ScrollOverflow::Chain {
+            let contains = self.contains_scroll(target);
             let remainder = Point {
-                x: unclamped.x - end.x,
-                y: unclamped.y - end.y,
+                x: if contains.x { 0.0 } else { unclamped.x - end.x },
+                y: if contains.y { 0.0 } else { unclamped.y - end.y },
             };
             if remainder != Point::ZERO {
                 if let Some(next) = self.next_scroller_in_chain(target) {
@@ -285,7 +298,7 @@ impl BaseDocument {
                         amount: ScrollAmount::By(remainder),
                         ..request
                     };
-                    return has_changed | self.scroll(request, dispatch_event);
+                    return has_changed | self.scroll(request);
                 }
             }
         }
@@ -300,7 +313,6 @@ impl BaseDocument {
         node_id: NodeId,
         delta: Point<f64>,
         request: ScrollRequest,
-        dispatch_event: &mut dyn FnMut(DomEvent),
     ) -> Option<bool> {
         let node = self.nodes.get_mut(node_id)?;
 
@@ -314,7 +326,7 @@ impl BaseDocument {
                 amount: ScrollAmount::By(delta),
                 ..request
             };
-            return Some(sub_doc.scroll(request, dispatch_event));
+            return Some(sub_doc.scroll(request));
         }
 
         // Single-line inputs scroll their text horizontally, multi-line inputs vertically.
@@ -339,6 +351,15 @@ impl BaseDocument {
 
         let has_changed = remainder != delta;
 
+        // Text inputs scroll their own content, so they need no scroll container check.
+        let contains = self.nodes[node_id].contains_overscroll();
+        if contains.x {
+            remainder.x = 0.0;
+        }
+        if contains.y {
+            remainder.y = 0.0;
+        }
+
         if remainder != Point::ZERO {
             if let Some(next) = self.next_scroller_in_chain(ScrollTarget::Node(node_id)) {
                 let request = ScrollRequest {
@@ -346,11 +367,23 @@ impl BaseDocument {
                     amount: ScrollAmount::By(remainder),
                     ..request
                 };
-                return Some(has_changed | self.scroll(request, dispatch_event));
+                return Some(has_changed | self.scroll(request));
             }
         }
 
         Some(has_changed)
+    }
+
+    /// Whether `overscroll-behavior` stops scroll chaining out of `target` on the x and y axes.
+    /// The property applies to scroll containers only.
+    fn contains_scroll(&self, target: ScrollTarget) -> Point<bool> {
+        let ScrollTarget::Node(node_id) = target else {
+            return Point { x: false, y: false };
+        };
+        self.nodes
+            .get(node_id)
+            .filter(|node| node.is_scroll_container())
+            .map_or(Point { x: false, y: false }, Node::contains_overscroll)
     }
 
     /// The scroller which unconsumed scroll is transferred to: the node's parent, or the
@@ -382,12 +415,7 @@ impl BaseDocument {
 
     /// Write a scroll target's offset (which must already be clamped to its scrollable
     /// range), dispatching a `scroll` event and returning whether the offset changed.
-    pub(crate) fn write_scroll_offset(
-        &mut self,
-        target: ScrollTarget,
-        offset: Point<f64>,
-        dispatch_event: &mut dyn FnMut(DomEvent),
-    ) -> bool {
+    pub(crate) fn write_scroll_offset(&mut self, target: ScrollTarget, offset: Point<f64>) -> bool {
         match self.canonical_scroll_target(target) {
             ScrollTarget::Viewport => {
                 let initial = self.viewport_scroll();
@@ -408,7 +436,7 @@ impl BaseDocument {
                         client_width: (self.viewport.window_size.0 as f64 / scale) as i32,
                         client_height: (self.viewport.window_size.1 as f64 / scale) as i32,
                     };
-                    dispatch_event(DomEvent::new(root_id, DomEventData::Scroll(event)));
+                    self.queue_ua_event(root_id, DomEventData::Scroll(event));
                 }
 
                 self.shell_provider.request_redraw();
@@ -437,7 +465,7 @@ impl BaseDocument {
                     client_width: layout.size.width as i32,
                     client_height: layout.size.height as i32,
                 };
-                dispatch_event(DomEvent::new(node_id, DomEventData::Scroll(event)));
+                self.queue_ua_event(node_id, DomEventData::Scroll(event));
 
                 self.show_scrollbars(node_id);
                 self.shell_provider.request_redraw();
@@ -446,39 +474,24 @@ impl BaseDocument {
         }
     }
 
-    pub fn scroll_node_by<F: FnMut(DomEvent)>(
-        &mut self,
-        node_id: NodeId,
-        x: f64,
-        y: f64,
-        dispatch_event: F,
-    ) {
-        self.scroll_node_by_has_changed(node_id, x, y, dispatch_event);
+    pub fn scroll_node_by(&mut self, node_id: NodeId, x: f64, y: f64) {
+        self.scroll_node_by_has_changed(node_id, x, y);
     }
 
     /// Scroll a node by given x and y
     /// Will bubble scrolling up to parent node once it can no longer scroll further
     /// If we're already at the root node, bubbles scrolling up to the viewport
-    pub fn scroll_node_by_has_changed<F: FnMut(DomEvent)>(
-        &mut self,
-        node_id: NodeId,
-        x: f64,
-        y: f64,
-        mut dispatch_event: F,
-    ) -> bool {
-        self.scroll(
-            ScrollRequest {
-                target: ScrollTarget::Node(node_id),
-                // A user-facing scroll delta moves the content, i.e. the opposite direction
-                // to the scroll offset.
-                amount: ScrollAmount::By(Point { x: -x, y: -y }),
-                overflow: ScrollOverflow::Chain,
-                source: ScrollSource::User,
-                behavior: ScrollBehavior::Instant,
-                interrupt_animation: false,
-            },
-            &mut dispatch_event,
-        )
+    pub fn scroll_node_by_has_changed(&mut self, node_id: NodeId, x: f64, y: f64) -> bool {
+        self.scroll(ScrollRequest {
+            target: ScrollTarget::Node(node_id),
+            // A user-facing scroll delta moves the content, i.e. the opposite direction
+            // to the scroll offset.
+            amount: ScrollAmount::By(Point { x: -x, y: -y }),
+            overflow: ScrollOverflow::Chain,
+            source: ScrollSource::User,
+            behavior: ScrollBehavior::Instant,
+            interrupt_animation: false,
+        })
     }
 
     pub fn scroll_viewport_by(&mut self, x: f64, y: f64) {
@@ -487,17 +500,14 @@ impl BaseDocument {
 
     /// Scroll the viewport by the given values
     pub fn scroll_viewport_by_has_changed(&mut self, x: f64, y: f64) -> bool {
-        self.scroll(
-            ScrollRequest {
-                target: ScrollTarget::Viewport,
-                amount: ScrollAmount::By(Point { x: -x, y: -y }),
-                overflow: ScrollOverflow::Clamp,
-                source: ScrollSource::User,
-                behavior: ScrollBehavior::Instant,
-                interrupt_animation: false,
-            },
-            &mut |_| {},
-        )
+        self.scroll(ScrollRequest {
+            target: ScrollTarget::Viewport,
+            amount: ScrollAmount::By(Point { x: -x, y: -y }),
+            overflow: ScrollOverflow::Clamp,
+            source: ScrollSource::User,
+            behavior: ScrollBehavior::Instant,
+            interrupt_animation: false,
+        })
     }
 
     pub(crate) fn scroll_chain_by(
@@ -505,24 +515,20 @@ impl BaseDocument {
         anchor_node_id: Option<NodeId>,
         scroll_x: f64,
         scroll_y: f64,
-        dispatch_event: &mut dyn FnMut(DomEvent),
     ) -> bool {
-        self.scroll(
-            ScrollRequest {
-                target: anchor_node_id.map_or(ScrollTarget::Viewport, ScrollTarget::Node),
-                amount: ScrollAmount::By(Point {
-                    x: -scroll_x,
-                    y: -scroll_y,
-                }),
-                overflow: ScrollOverflow::Chain,
-                source: ScrollSource::User,
-                behavior: ScrollBehavior::Instant,
-                // A user-initiated scroll aborts any smooth scroll in progress, so that the
-                // two do not fight over the scroll offset for the rest of the animation.
-                interrupt_animation: true,
-            },
-            dispatch_event,
-        )
+        self.scroll(ScrollRequest {
+            target: anchor_node_id.map_or(ScrollTarget::Viewport, ScrollTarget::Node),
+            amount: ScrollAmount::By(Point {
+                x: -scroll_x,
+                y: -scroll_y,
+            }),
+            overflow: ScrollOverflow::Chain,
+            source: ScrollSource::User,
+            behavior: ScrollBehavior::Instant,
+            // A user-initiated scroll aborts any smooth scroll in progress, so that the
+            // two do not fight over the scroll offset for the rest of the animation.
+            interrupt_animation: true,
+        })
     }
 
     /// Duration (in milliseconds) of an animated scroll.
@@ -637,18 +643,14 @@ impl BaseDocument {
             return;
         }
 
-        // TODO: dispatch `scroll` events for programmatic scrolls.
-        self.scroll(
-            ScrollRequest {
-                target: ScrollTarget::Node(node_id),
-                amount,
-                overflow: ScrollOverflow::Clamp,
-                source: ScrollSource::Programmatic,
-                behavior,
-                interrupt_animation: true,
-            },
-            &mut |_| {},
-        );
+        self.scroll(ScrollRequest {
+            target: ScrollTarget::Node(node_id),
+            amount,
+            overflow: ScrollOverflow::Clamp,
+            source: ScrollSource::Programmatic,
+            behavior,
+            interrupt_animation: true,
+        });
     }
 
     fn aligned_scroll_offset(
@@ -1057,24 +1059,15 @@ impl BaseDocument {
                 let dx = fling_state.x_velocity * time_diff_ms;
                 let dy = fling_state.y_velocity * time_diff_ms;
 
-                self.scroll_chain_by(Some(fling_state.target), dx, dy, &mut |_| {});
+                self.scroll_chain_by(Some(fling_state.target), dx, dy);
                 if fling_state.x_velocity.abs() < 0.1 && fling_state.y_velocity.abs() < 0.1 {
                     self.scroll_animation = ScrollAnimationState::None;
                 }
             }
             ScrollAnimationState::ScrollTo(scroll_to) => {
                 let scroll_to = scroll_to.clone();
-                let time_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64 as f64;
-
                 // Normalised progress through the animation, clamped to [0, 1].
-                let progress = if scroll_to.duration <= 0.0 {
-                    1.0
-                } else {
-                    ((time_ms - scroll_to.start_time) / scroll_to.duration).clamp(0.0, 1.0)
-                };
+                let progress = scroll_to.progress();
                 let eased = ease_in_out_cubic(progress);
 
                 // Interpolate the target offset and move to it.
@@ -1082,8 +1075,7 @@ impl BaseDocument {
                     x: scroll_to.start.x + (scroll_to.end.x - scroll_to.start.x) * eased,
                     y: scroll_to.start.y + (scroll_to.end.y - scroll_to.start.y) * eased,
                 };
-                // TODO: dispatch `scroll` events for programmatic scrolls.
-                self.write_scroll_offset(scroll_to.target, target, &mut |_| {});
+                self.write_scroll_offset(scroll_to.target, target);
 
                 if progress >= 1.0 {
                     self.scroll_animation = ScrollAnimationState::None;

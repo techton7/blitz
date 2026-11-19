@@ -16,9 +16,9 @@ use blitz_html::{HtmlDocument, HtmlProvider};
 use blitz_test_harness::Harness;
 use blitz_traits::{
     events::{
-        BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData, EventState,
-        KeyState, MouseEventButton, MouseEventButtons, Point, PointerCoords, PointerDetails,
-        UiEvent,
+        BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData,
+        EventDispatchSource, EventState, KeyState, MouseEventButton, MouseEventButtons, Point,
+        PointerCoords, PointerDetails, UiEvent,
     },
     navigation::{NavigationOptions, NavigationProvider},
     net::{Body, EntryValue},
@@ -1443,6 +1443,7 @@ fn detached_node_cannot_activate() {
             false,
             false,
         )),
+        EventDispatchSource::Input,
     ));
     drop(driver);
     assert_eq!(h.total_clicks(), 0);
@@ -1480,7 +1481,11 @@ fn disabled_button_input_inert_anchor_ignores_disabled() {
         } else {
             DomEventData::KeyUp(kd)
         };
-        EventDriver::new(&mut doc, &mut h).handle_dom_event(DomEvent::new(dbtn, data));
+        EventDriver::new(&mut doc, &mut h).handle_dom_event(DomEvent::new(
+            dbtn,
+            data,
+            EventDispatchSource::Input,
+        ));
     }
     assert_eq!(h.clicks_on(dbtn), 0);
 
@@ -1497,7 +1502,11 @@ fn disabled_button_input_inert_anchor_ignores_disabled() {
         } else {
             DomEventData::KeyUp(kd)
         };
-        EventDriver::new(&mut doc, &mut h).handle_dom_event(DomEvent::new(dinp, data));
+        EventDriver::new(&mut doc, &mut h).handle_dom_event(DomEvent::new(
+            dinp,
+            data,
+            EventDispatchSource::Input,
+        ));
     }
     assert_eq!(h.clicks_on(dinp), 0);
     assert!(nav.take().is_empty());

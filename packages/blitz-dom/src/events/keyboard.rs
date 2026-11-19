@@ -1,4 +1,3 @@
-use crate::events::focus::generate_focus_events;
 use crate::traversal::TreeTraverser;
 use crate::{
     BaseDocument,
@@ -8,7 +7,7 @@ use crate::{
 use blitz_traits::node_id::NodeId;
 use blitz_traits::{
     SmolStr,
-    events::{BlitzInputEvent, BlitzKeyEvent, DomEvent, DomEventData},
+    events::{BlitzInputEvent, BlitzKeyEvent, DomEventData},
 };
 use keyboard_types::{Key, Modifiers, NamedKey};
 
@@ -17,11 +16,10 @@ pub(super) enum KeyboardOrTextInputEvent {
     AppleStandardKeyBinding(SmolStr),
 }
 
-pub(crate) fn handle_key_or_input_event<F: FnMut(DomEvent)>(
+pub(crate) fn handle_key_or_input_event(
     doc: &mut BaseDocument,
     target: NodeId,
     event: KeyboardOrTextInputEvent,
-    mut dispatch_event: F,
 ) {
     if let KeyboardOrTextInputEvent::KeyPress(event) = &event {
         if event.is_composing {
@@ -34,17 +32,11 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(DomEvent)>(
                 .intersects(Modifiers::CONTROL | Modifiers::ALT | Modifiers::META)
         {
             let backwards = event.modifiers.contains(Modifiers::SHIFT);
-            generate_focus_events(
-                doc,
-                &mut |doc| {
-                    if backwards {
-                        doc.focus_prev_node();
-                    } else {
-                        doc.focus_next_node();
-                    }
-                },
-                &mut dispatch_event,
-            );
+            if backwards {
+                doc.focus_prev_node();
+            } else {
+                doc.focus_next_node();
+            }
             return;
         }
 
@@ -114,7 +106,7 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(DomEvent)>(
             };
 
             if let Some(generated_event) = generated_event {
-                doc.apply_generated_text_input_event(node_id, generated_event, dispatch_event);
+                doc.apply_generated_text_input_event(node_id, generated_event);
             }
             return;
         }
@@ -138,7 +130,7 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(DomEvent)>(
                             doc.last_mousedown_time = None;
                             let click =
                                 doc.nodes[node_id].synthetic_click_event(key_event.modifiers);
-                            dispatch_event(DomEvent::new(node_id, click));
+                            doc.queue_ua_event(node_id, click);
                         }
                     } else if doc.is_enter_non_link_activatable_element(node_id)
                         && !key_event
@@ -148,7 +140,7 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(DomEvent)>(
                         doc.click_count = 0;
                         doc.last_mousedown_time = None;
                         let click = doc.nodes[node_id].synthetic_click_event(key_event.modifiers);
-                        dispatch_event(DomEvent::new(node_id, click));
+                        doc.queue_ua_event(node_id, click);
                     }
                 }
                 Key::Character(s) if s == " " => {
@@ -167,12 +159,7 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(DomEvent)>(
     }
 }
 
-pub(crate) fn handle_keyup_event<F: FnMut(DomEvent)>(
-    doc: &mut BaseDocument,
-    target: NodeId,
-    event: &BlitzKeyEvent,
-    mut dispatch_event: F,
-) {
+pub(crate) fn handle_keyup_event(doc: &mut BaseDocument, target: NodeId, event: &BlitzKeyEvent) {
     if event.is_composing || !matches!(&event.key, Key::Character(s) if s == " ") {
         return;
     }
@@ -187,16 +174,15 @@ pub(crate) fn handle_keyup_event<F: FnMut(DomEvent)>(
         doc.click_count = 0;
         doc.last_mousedown_time = None;
         let click = doc.nodes[target].synthetic_click_event(event.modifiers);
-        dispatch_event(DomEvent::new(target, click));
+        doc.queue_ua_event(target, click);
     }
 }
 
 impl BaseDocument {
-    pub(crate) fn apply_generated_text_input_event<F: FnMut(DomEvent)>(
+    pub(crate) fn apply_generated_text_input_event(
         &mut self,
         node_id: NodeId,
         event: GeneratedTextInputEvent,
-        mut dispatch_event: F,
     ) {
         let node = &mut self.nodes[node_id];
         let element_data = node
@@ -209,10 +195,7 @@ impl BaseDocument {
         match event {
             GeneratedTextInputEvent::Input => {
                 let value = input_data.editor.raw_text().to_string();
-                dispatch_event(DomEvent::new(
-                    node_id,
-                    DomEventData::Input(BlitzInputEvent { value }),
-                ));
+                self.queue_ua_event(node_id, DomEventData::Input(BlitzInputEvent { value }));
                 self.shell_provider.request_redraw();
             }
             GeneratedTextInputEvent::Select | GeneratedTextInputEvent::PreEditChange => {
@@ -220,23 +203,16 @@ impl BaseDocument {
             }
             GeneratedTextInputEvent::Submit => {
                 if let Some(value) = input_data.commit_change() {
-                    dispatch_event(DomEvent::new(
-                        node_id,
-                        DomEventData::Change(BlitzInputEvent { value }),
-                    ));
+                    self.queue_ua_event(node_id, DomEventData::Change(BlitzInputEvent { value }));
                 }
-                implicit_form_submission(self, node_id, dispatch_event);
+                implicit_form_submission(self, node_id);
             }
         }
     }
 }
 
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
-fn implicit_form_submission<F: FnMut(DomEvent)>(
-    doc: &mut BaseDocument,
-    text_target: NodeId,
-    mut dispatch_event: F,
-) {
+fn implicit_form_submission(doc: &mut BaseDocument, text_target: NodeId) {
     let Some(&form_owner_id) = doc.controls_to_form.get(&text_target) else {
         return;
     };
@@ -256,7 +232,7 @@ fn implicit_form_submission<F: FnMut(DomEvent)>(
             doc.click_count = 0;
             doc.last_mousedown_time = None;
             let click = doc.nodes[btn_id].synthetic_click_event(Modifiers::empty());
-            dispatch_event(DomEvent::new(btn_id, click));
+            doc.queue_ua_event(btn_id, click);
         }
         return;
     }

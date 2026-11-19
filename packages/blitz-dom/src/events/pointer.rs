@@ -6,8 +6,8 @@ use web_time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use blitz_traits::{
     events::{
-        BlitzInputEvent, BlitzPointerEvent, BlitzPointerId, BlitzWheelDelta, BlitzWheelEvent,
-        DomEvent, DomEventData, MouseEventButton, MouseEventButtons,
+        BlitzInputEvent, BlitzPointerEvent, BlitzPointerId, DomEventData, MouseEventButton,
+        MouseEventButtons,
     },
     navigation::NavigationOptions,
 };
@@ -21,8 +21,6 @@ use crate::{
     node::{ScrollbarRef, SpecialElementData},
     scrolling::{FlingState, ScrollAnimationState},
 };
-
-use super::focus::generate_focus_events;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PanState {
@@ -203,11 +201,10 @@ fn touch_action_pan_axes(doc: &BaseDocument, node_id: NodeId) -> (bool, bool) {
     (allow_x, allow_y)
 }
 
-pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
+pub(crate) fn handle_pointermove(
     doc: &mut BaseDocument,
     target: NodeId,
     event: &BlitzPointerEvent,
-    mut dispatch_event: F,
 ) -> bool {
     let x = event.page_x();
     let y = event.page_y();
@@ -280,7 +277,7 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
         let target = state.target;
         let (dx, dy) = state.update(time_ms, event.screen_x(), event.screen_y());
 
-        let has_changed = doc.scroll_chain_by(Some(target), dx, dy, &mut dispatch_event);
+        let has_changed = doc.scroll_chain_by(Some(target), dx, dy);
         return has_changed;
     }
 
@@ -300,7 +297,7 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
             AbsoluteAxis::Horizontal => (-delta_px * ratio, 0.0),
             AbsoluteAxis::Vertical => (0.0, -delta_px * ratio),
         };
-        let has_changed = doc.scroll_chain_by(Some(node_id), dx, dy, &mut dispatch_event);
+        let has_changed = doc.scroll_chain_by(Some(node_id), dx, dy);
         return has_changed;
     }
 
@@ -309,10 +306,7 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
     };
 
     if changed {
-        dispatch_event(DomEvent::new(
-            hit.node_id,
-            DomEventData::MouseEnter(event.clone()),
-        ));
+        doc.queue_ua_event(hit.node_id, DomEventData::MouseEnter(event.clone()));
     }
 
     // `target` is the event's canonicalized target (never a layout-generated
@@ -388,18 +382,10 @@ pub(crate) fn handle_pointermove<F: FnMut(DomEvent)>(
     changed
 }
 
-pub(crate) fn handle_pointerdown(
-    doc: &mut BaseDocument,
-    target: NodeId,
-    event: &BlitzPointerEvent,
-    dispatch_event: &mut dyn FnMut(DomEvent),
-) {
-    let (x, y) = (event.page_x(), event.page_y());
-    let (button, mods) = (event.button, event.mods);
-
-    // A finger only moves focus once it is lifted without panning (see `handle_pointerup`)
-    let moves_focus = button == MouseEventButton::Main && !event.is_finger();
-
+/// Record that the pointer has pressed, for counting clicks and detecting drags, and stop
+/// a scroll that is under way. Runs for every `pointerdown`, including one whose default
+/// action was prevented.
+pub(crate) fn record_pointerdown(doc: &mut BaseDocument, x: f32, y: f32) {
     // Compute click count using the previous mousedown position (before updating)
     // This handles both double-click detection and text input word/line selection
     // TODO: For text inputs, only increment click count if click maps to the same/similar caret position
@@ -420,12 +406,21 @@ pub(crate) fn handle_pointerdown(
     doc.mousedown_position = taffy::Point { x, y };
     doc.drag_mode = DragMode::None;
     doc.scroll_animation = ScrollAnimationState::None;
+}
+
+/// The default action of a `pointerdown`, which [`record_pointerdown`] has recorded.
+pub(crate) fn handle_pointerdown(doc: &mut BaseDocument, target: NodeId, event: &BlitzPointerEvent) {
+    let (x, y) = (event.page_x(), event.page_y());
+    let (button, mods) = (event.button, event.mods);
+
+    // A finger only moves focus once it is lifted without panning (see `handle_pointerup`)
+    let moves_focus = button == MouseEventButton::Main && !event.is_finger();
 
     let Some(hit) = doc.hit(x, y) else {
         // Clear text selection when clicking outside any element
         doc.clear_text_selection();
         if moves_focus {
-            generate_focus_events(doc, &mut |doc| doc.clear_focus(), dispatch_event);
+            doc.clear_focus();
         }
         return;
     };
@@ -522,7 +517,7 @@ pub(crate) fn handle_pointerdown(
             }
 
             if moves_focus {
-                update_focus_for_press(doc, target, dispatch_event);
+                update_focus_for_press(doc, target);
             }
         }
         ClickTarget::TextInput {
@@ -561,24 +556,21 @@ pub(crate) fn handle_pointerdown(
             }
 
             if moves_focus {
-                generate_focus_events(
-                    doc,
-                    &mut |doc| {
-                        doc.set_focus_to_with_source(hit.node_id, FocusSource::Pointer);
-                    },
-                    dispatch_event,
-                );
+                doc.set_focus_to_with_source(hit.node_id, FocusSource::Pointer);
             }
         }
     }
 }
 
-pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
+/// Runs for every `pointerup`, including one whose default action was prevented: the drag
+/// under way still ends and the click is still dispatched, as neither is `pointerup`'s
+/// default action.
+pub(crate) fn handle_pointerup(
     doc: &mut BaseDocument,
     target: NodeId,
     click_target: Option<NodeId>,
     event: &BlitzPointerEvent,
-    mut dispatch_event: F,
+    default_prevented: bool,
 ) {
     if doc.devtools().highlight_hover {
         if let Some(mut node) = doc.get_node(target) {
@@ -599,7 +591,11 @@ pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
     // locally for use within this function
     let drag_mode = doc.drag_mode.take();
 
-    let do_click = !matches!(drag_mode, DragMode::Panning(_) | DragMode::ScrollbarDrag(_));
+    // Don't dispatch click if we were doing a text selection drag or panning
+    // the document with a touch. Nor for a prevented touch or pen: that may be a
+    // prevented `touchend`, which does suppress the click.
+    let do_click = !matches!(drag_mode, DragMode::Panning(_) | DragMode::ScrollbarDrag(_))
+        && (!default_prevented || event.is_mouse());
 
     // Repaint so a dragged scrollbar thumb drops its active styling, and
     // restart its fade-out delay now that the drag no longer holds it shown
@@ -613,7 +609,9 @@ pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
         .unwrap()
         .as_millis() as u64;
 
-    if let DragMode::Panning(state) = &drag_mode {
+    if let DragMode::Panning(state) = &drag_mode
+        && !default_prevented
+    {
         if let Some(fling) = state.generate_fling(time_ms) {
             doc.scroll_animation = ScrollAnimationState::Fling(fling);
             doc.shell_provider.request_redraw();
@@ -629,31 +627,21 @@ pub(crate) fn handle_pointerup<F: FnMut(DomEvent)>(
     // Dispatch a click event
     if do_click && event.button == MouseEventButton::Main {
         if event.is_finger() {
-            update_focus_for_press(doc, click_target, &mut dispatch_event);
+            update_focus_for_press(doc, click_target);
         }
-        dispatch_event(DomEvent::new(
-            click_target,
-            DomEventData::Click(event.clone()),
-        ));
+        doc.queue_ua_event(click_target, DomEventData::Click(event.clone()));
     }
 
     // Dispatch a context menu event
     if do_click && event.button == MouseEventButton::Secondary {
-        dispatch_event(DomEvent::new(
-            click_target,
-            DomEventData::ContextMenu(event.clone()),
-        ));
+        doc.queue_ua_event(click_target, DomEventData::ContextMenu(event.clone()));
     }
 }
 
 /// Focus the nearest inclusive ancestor of `target` that is focusable (including
 /// `tabindex="-1"` elements), or clear focus if there is none. A disabled element
 /// ends the search without changing focus.
-fn update_focus_for_press(
-    doc: &mut BaseDocument,
-    target: NodeId,
-    dispatch_event: &mut dyn FnMut(DomEvent),
-) {
+fn update_focus_for_press(doc: &mut BaseDocument, target: NodeId) {
     let mut maybe_node_id = Some(target);
     while let Some(node_id) = maybe_node_id {
         if doc.is_form_control_disabled(node_id) {
@@ -668,28 +656,17 @@ fn update_focus_for_press(
             if !is_non_controlling_summary
                 && (el.is_focussable || el.attr_parsed::<i32>(local_name!("tabindex")).is_some())
             {
-                generate_focus_events(
-                    doc,
-                    &mut |doc| {
-                        doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
-                    },
-                    dispatch_event,
-                );
+                doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
                 return;
             }
         }
         maybe_node_id = node.parent;
     }
 
-    generate_focus_events(doc, &mut |doc| doc.clear_focus(), dispatch_event);
+    doc.clear_focus();
 }
 
-pub(crate) fn handle_click(
-    doc: &mut BaseDocument,
-    target: NodeId,
-    event: &BlitzPointerEvent,
-    dispatch_event: &mut dyn FnMut(DomEvent),
-) {
+pub(crate) fn handle_click(doc: &mut BaseDocument, target: NodeId, event: &BlitzPointerEvent) {
     let double_click_event = event.clone();
     let is_double_click = doc.click_count == 2;
 
@@ -723,24 +700,9 @@ pub(crate) fn handle_click(
                         node.mark_ancestors_dirty();
                     });
                     let value = is_checked.to_string();
-                    dispatch_event(DomEvent::new(
-                        node_id,
-                        DomEventData::Input(BlitzInputEvent {
-                            value: value.clone(),
-                        }),
-                    ));
-                    dispatch_event(DomEvent::new(
-                        node_id,
-                        DomEventData::Change(BlitzInputEvent { value }),
-                    ));
+                    queue_input_and_change(doc, node_id, value);
                     if doc.focus_node_id != Some(node_id) {
-                        generate_focus_events(
-                            doc,
-                            &mut |doc| {
-                                doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
-                            },
-                            dispatch_event,
-                        );
+                        doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
                     }
                     break 'matched;
                 }
@@ -763,26 +725,11 @@ pub(crate) fn handle_click(
                         .unwrap_or(false);
                     if !was_checked && is_checked {
                         let value = String::from("true");
-                        dispatch_event(DomEvent::new(
-                            node_id,
-                            DomEventData::Input(BlitzInputEvent {
-                                value: value.clone(),
-                            }),
-                        ));
-                        dispatch_event(DomEvent::new(
-                            node_id,
-                            DomEventData::Change(BlitzInputEvent { value }),
-                        ));
+                        queue_input_and_change(doc, node_id, value);
                     }
 
                     if doc.focus_node_id != Some(node_id) {
-                        generate_focus_events(
-                            doc,
-                            &mut |doc| {
-                                doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
-                            },
-                            dispatch_event,
-                        );
+                        doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
                     }
 
                     break 'matched;
@@ -794,13 +741,7 @@ pub(crate) fn handle_click(
                         let parent_id = doc.nodes[node_id].parent.unwrap();
                         doc.toggle_details_open(parent_id);
                         if doc.focus_node_id != Some(node_id) {
-                            generate_focus_events(
-                                doc,
-                                &mut |doc| {
-                                    doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
-                                },
-                                dispatch_event,
-                            );
+                            doc.set_focus_to_with_source(node_id, FocusSource::Pointer);
                         }
                         break 'matched;
                     }
@@ -829,18 +770,12 @@ pub(crate) fn handle_click(
                             }
                             let click = doc.nodes[target_node_id].synthetic_click_event(event.mods);
                             if doc.nodes[target_node_id].is_focussable() {
-                                generate_focus_events(
-                                    doc,
-                                    &mut |doc| {
-                                        doc.set_focus_to_with_source(
-                                            target_node_id,
-                                            FocusSource::Pointer,
-                                        );
-                                    },
-                                    dispatch_event,
+                                doc.set_focus_to_with_source(
+                                    target_node_id,
+                                    FocusSource::Pointer,
                                 );
                             }
-                            dispatch_event(DomEvent::new(target_node_id, click));
+                            doc.queue_ua_event(target_node_id, click);
                         }
                         break 'matched;
                     }
@@ -929,31 +864,18 @@ pub(crate) fn handle_click(
     // Dispatch double-click event if this is the second click in quick succession
     // (click_count was already computed in handle_mousedown)
     if is_double_click {
-        dispatch_event(DomEvent::new(
-            target,
-            DomEventData::DoubleClick(double_click_event),
-        ));
+        doc.queue_ua_event(target, DomEventData::DoubleClick(double_click_event));
     }
 }
 
-pub(crate) fn handle_wheel<F: FnMut(DomEvent)>(
-    doc: &mut BaseDocument,
-    _: NodeId,
-    event: BlitzWheelEvent,
-    mut dispatch_event: F,
-) {
-    let (scroll_x, scroll_y) = match event.delta {
-        BlitzWheelDelta::Lines(x, y) => (x * 20.0, y * 20.0),
-        BlitzWheelDelta::Pixels(x, y) => (x, y),
-    };
-
-    let has_changed = doc.scroll_chain_by(
-        doc.get_hover_node_id(),
-        scroll_x,
-        scroll_y,
-        &mut dispatch_event,
+/// Queue the `input` and `change` events that a checkbox or radio button generates when
+/// its state is changed by a click.
+fn queue_input_and_change(doc: &mut BaseDocument, node_id: NodeId, value: String) {
+    doc.queue_ua_event(
+        node_id,
+        DomEventData::Input(BlitzInputEvent {
+            value: value.clone(),
+        }),
     );
-    if has_changed {
-        doc.shell_provider.request_redraw();
-    }
+    doc.queue_ua_event(node_id, DomEventData::Change(BlitzInputEvent { value }));
 }

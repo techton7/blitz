@@ -15,9 +15,10 @@ mod mutation_buffer;
 mod mutation_writer;
 mod write_once_attr;
 pub use blitz_dom::{DocumentConfig, FocusOptions, FocusSource, PointerCaptureError};
+pub use blitz_traits::events::{BlitzWheelPhase, BlitzWheelSource};
 pub use dioxus_document::DioxusDocument;
 pub use events::{
-    NativePointerData, NodeHandle, synthetic_click_event, synthetic_form_event,
+    NativePointerData, NativeWheelData, NodeHandle, synthetic_click_event, synthetic_form_event,
     synthetic_keyboard_event,
 };
 pub use write_once_attr::{CustomWidgetAttr, SubDocumentAttr};
