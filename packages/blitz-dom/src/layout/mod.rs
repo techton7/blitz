@@ -361,7 +361,7 @@ impl LayoutPassState<'_> {
                                 },
                             );
                         }
-                        None | Some("text" | "password" | "email" | "tel" | "url" | "search") => {
+                        None | Some("text" | "password" | "email" | "tel" | "url" | "search" | "number") => {
                             return compute_leaf_layout(
                                 inputs,
                                 &node.layout_style(),
