@@ -1,4 +1,8 @@
+use crate::scrolling::{
+    ScrollAmount, ScrollBehavior, ScrollOverflow, ScrollRequest, ScrollSource, ScrollTarget,
+};
 use crate::traversal::TreeTraverser;
+use crate::util::Point;
 use crate::{
     BaseDocument,
     node::GeneratedTextInputEvent,
@@ -10,6 +14,9 @@ use blitz_traits::{
     events::{BlitzInputEvent, BlitzKeyEvent, DomEventData},
 };
 use keyboard_types::{Key, Modifiers, NamedKey};
+
+const KEYBOARD_SCROLL_LINE_STEP: f64 = 40.0;
+const KEYBOARD_SCROLL_PAGE_FACTOR: f64 = 0.875;
 
 pub(super) enum KeyboardOrTextInputEvent {
     KeyPress(BlitzKeyEvent),
@@ -72,15 +79,12 @@ pub(crate) fn handle_key_or_input_event(
             return;
         }
 
-        if !doc.is_node_displayed(node_id) || doc.is_form_control_disabled(node_id) {
-            return;
-        }
-
+        let is_active_focus = doc.is_node_displayed(node_id) && !doc.is_form_control_disabled(node_id);
         let has_text_input = doc.nodes[node_id]
             .element_data()
             .is_some_and(|el| el.text_input_data().is_some());
 
-        if has_text_input {
+        if is_active_focus && has_text_input {
             let generated_event = {
                 let node = &mut doc.nodes[node_id];
                 let input_data = node
@@ -111,7 +115,7 @@ pub(crate) fn handle_key_or_input_event(
             return;
         }
 
-        if let KeyboardOrTextInputEvent::KeyPress(key_event) = event {
+        if is_active_focus && let KeyboardOrTextInputEvent::KeyPress(key_event) = &event {
             if !key_event.state.is_pressed() {
                 return;
             }
@@ -131,6 +135,7 @@ pub(crate) fn handle_key_or_input_event(
                             let click =
                                 doc.nodes[node_id].synthetic_click_event(key_event.modifiers);
                             doc.queue_ua_event(node_id, click);
+                            return;
                         }
                     } else if doc.is_enter_non_link_activatable_element(node_id)
                         && !key_event
@@ -141,6 +146,7 @@ pub(crate) fn handle_key_or_input_event(
                         doc.last_mousedown_time = None;
                         let click = doc.nodes[node_id].synthetic_click_event(key_event.modifiers);
                         doc.queue_ua_event(node_id, click);
+                        return;
                     }
                 }
                 Key::Character(s) if s == " " => {
@@ -151,11 +157,182 @@ pub(crate) fn handle_key_or_input_event(
                         if !key_event.is_auto_repeating {
                             doc.set_keyboard_active_node(node_id);
                         }
+                        return;
                     }
                 }
                 _ => {}
             }
         }
+    }
+
+    if let KeyboardOrTextInputEvent::KeyPress(key_event) = &event {
+        handle_keyboard_scroll(doc, key_event);
+    }
+}
+
+fn canonical_scroll_target(doc: &BaseDocument, target: ScrollTarget) -> ScrollTarget {
+    match target {
+        ScrollTarget::Node(node_id)
+            if doc.try_root_element().is_some_and(|el| el.id == node_id) =>
+        {
+            ScrollTarget::Viewport
+        }
+        other => other,
+    }
+}
+
+fn effective_vertical_scroll_target(
+    doc: &BaseDocument,
+    start: ScrollTarget,
+    dir_y: f64,
+) -> Option<ScrollTarget> {
+    let mut current = start;
+    loop {
+        let target = canonical_scroll_target(doc, current);
+        let (offset, min, max) = doc.scroll_state(target, false);
+        let can_scroll = if dir_y > 0.0 {
+            offset.y < max.y
+        } else {
+            offset.y > min.y
+        };
+        if can_scroll {
+            return Some(target);
+        }
+
+        let ScrollTarget::Node(node_id) = target else {
+            return None;
+        };
+        let node = doc.nodes.get(node_id)?;
+        if node.is_scroll_container() && node.contains_overscroll().y {
+            return None;
+        }
+        current = node
+            .parent
+            .map_or(ScrollTarget::Viewport, ScrollTarget::Node);
+    }
+}
+
+fn scroll_target_visible_height(doc: &BaseDocument, target: ScrollTarget) -> f64 {
+    match target {
+        ScrollTarget::Viewport => {
+            let scale = doc.viewport.scale() as f64;
+            doc.viewport.window_size.1 as f64 / scale
+        }
+        ScrollTarget::Node(node_id) => doc
+            .get_node(node_id)
+            .map_or(0.0, |node| node.client_height() as f64),
+    }
+}
+
+fn handle_keyboard_scroll(doc: &mut BaseDocument, key_event: &BlitzKeyEvent) {
+    if key_event.is_composing || !key_event.state.is_pressed() {
+        return;
+    }
+
+    if key_event
+        .modifiers
+        .intersects(Modifiers::CONTROL | Modifiers::ALT | Modifiers::META)
+    {
+        return;
+    }
+
+    let shift = key_event.modifiers.contains(Modifiers::SHIFT);
+    let start_target = doc
+        .focus_node_id
+        .filter(|&id| doc.is_node_displayed(id))
+        .map_or(ScrollTarget::Viewport, ScrollTarget::Node);
+
+    enum ScrollKeyAction {
+        By(f64, f64),
+        Page(f64),
+        Edge(bool),
+    }
+
+    let action = match &key_event.key {
+        Key::Named(NamedKey::ArrowUp) if !shift => {
+            ScrollKeyAction::By(0.0, -KEYBOARD_SCROLL_LINE_STEP)
+        }
+        Key::Named(NamedKey::ArrowDown) if !shift => {
+            ScrollKeyAction::By(0.0, KEYBOARD_SCROLL_LINE_STEP)
+        }
+        Key::Named(NamedKey::ArrowLeft) if !shift => {
+            ScrollKeyAction::By(-KEYBOARD_SCROLL_LINE_STEP, 0.0)
+        }
+        Key::Named(NamedKey::ArrowRight) if !shift => {
+            ScrollKeyAction::By(KEYBOARD_SCROLL_LINE_STEP, 0.0)
+        }
+        Key::Named(NamedKey::PageUp) if !shift => ScrollKeyAction::Page(-1.0),
+        Key::Named(NamedKey::PageDown) if !shift => ScrollKeyAction::Page(1.0),
+        Key::Named(NamedKey::Home) if !shift => ScrollKeyAction::Edge(false),
+        Key::Named(NamedKey::End) if !shift => ScrollKeyAction::Edge(true),
+        Key::Character(s) if s == " " => {
+            if doc.focus_node_id.is_some_and(|id| {
+                doc.is_space_activatable_element(id)
+                    && doc.is_node_displayed(id)
+                    && !doc.is_form_control_disabled(id)
+            }) {
+                return;
+            }
+            ScrollKeyAction::Page(if shift { -1.0 } else { 1.0 })
+        }
+        _ => return,
+    };
+
+    // `ScrollAmount::By` adds directly to scroll offsets (+y scrolls down, +x scrolls right),
+    // unlike `scroll_chain_by` which negates wheel deltas.
+    let has_changed = match action {
+        ScrollKeyAction::By(dx, dy) => doc.scroll(ScrollRequest {
+            target: start_target,
+            amount: ScrollAmount::By(Point { x: dx, y: dy }),
+            overflow: ScrollOverflow::Chain,
+            source: ScrollSource::User,
+            behavior: ScrollBehavior::Instant,
+            interrupt_animation: true,
+        }),
+        ScrollKeyAction::Page(dir_y) => {
+            let Some(effective_target) = effective_vertical_scroll_target(doc, start_target, dir_y)
+            else {
+                return;
+            };
+            let visible_height = scroll_target_visible_height(doc, effective_target);
+            let step =
+                (visible_height * KEYBOARD_SCROLL_PAGE_FACTOR).max(KEYBOARD_SCROLL_LINE_STEP);
+            doc.scroll(ScrollRequest {
+                target: start_target,
+                amount: ScrollAmount::By(Point {
+                    x: 0.0,
+                    y: dir_y * step,
+                }),
+                overflow: ScrollOverflow::Chain,
+                source: ScrollSource::User,
+                behavior: ScrollBehavior::Instant,
+                interrupt_animation: true,
+            })
+        }
+        ScrollKeyAction::Edge(to_end) => {
+            let dir_y = if to_end { 1.0 } else { -1.0 };
+            let Some(effective_target) = effective_vertical_scroll_target(doc, start_target, dir_y)
+            else {
+                return;
+            };
+            let (current, min, max) = doc.scroll_state(effective_target, false);
+            let target_y = if to_end { max.y } else { min.y };
+            doc.scroll(ScrollRequest {
+                target: effective_target,
+                amount: ScrollAmount::To(Point {
+                    x: current.x,
+                    y: target_y,
+                }),
+                overflow: ScrollOverflow::Clamp,
+                source: ScrollSource::User,
+                behavior: ScrollBehavior::Instant,
+                interrupt_animation: true,
+            })
+        }
+    };
+
+    if has_changed {
+        doc.shell_provider.request_redraw();
     }
 }
 
