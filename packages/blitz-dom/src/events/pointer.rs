@@ -210,6 +210,8 @@ pub(crate) fn handle_pointermove(
     let y = event.page_y();
     let buttons = event.buttons;
 
+    doc.wheel_gesture
+        .on_pointer_move(event.client_x(), event.client_y());
     let is_captured = doc.active_capture_node(event.id).is_some();
     let explicit_capture = doc.has_explicit_pointer_capture(event.id);
     let mut changed = if is_captured {

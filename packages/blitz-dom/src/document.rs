@@ -1257,6 +1257,7 @@ impl BaseDocument {
                 record.element_under_pointer = surviving_ancestor;
             }
         }
+        self.wheel_gesture.clear_latched_node(node_id);
         self.scrollbar_activity.remove(&node_id);
     }
 
