@@ -44,6 +44,7 @@ mod hit_inline_embedded_box;
 mod hit_test_dropped_nodes;
 mod hover_dom_ancestors;
 mod image_load_events;
+mod ime_preedit_underline;
 mod incremental_oracle;
 mod inline_bfc_padding;
 mod inline_box_baseline;
