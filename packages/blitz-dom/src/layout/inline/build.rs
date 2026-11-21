@@ -302,9 +302,11 @@ pub(crate) fn build_inline_layout_into(
                             build_inline_layout_recursive(
                                 builder,
                                 text_transformer,
+                                line_break_tracker,
                                 nodes,
                                 before_id,
                                 &text_transform,
+                                parent_unrestricted,
                             );
                         }
                         for child_id in node.children.iter().copied() {
@@ -323,9 +325,11 @@ pub(crate) fn build_inline_layout_into(
                             build_inline_layout_recursive(
                                 builder,
                                 text_transformer,
+                                line_break_tracker,
                                 nodes,
                                 after_id,
                                 &text_transform,
+                                parent_unrestricted,
                             );
                         }
                         builder.pop_style_span();

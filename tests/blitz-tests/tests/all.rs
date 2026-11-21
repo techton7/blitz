@@ -42,6 +42,7 @@ mod harness_smoke;
 mod hidden_checkbox_input;
 mod hit_inline_embedded_box;
 mod hit_test_dropped_nodes;
+mod hit_test_overflow;
 mod hover_dom_ancestors;
 mod image_load_events;
 mod ime_preedit_underline;
@@ -101,6 +102,7 @@ mod transform_2d_subset;
 mod transform_viewport_scale;
 mod ua_stylesheet_order;
 mod wheel_axis_lock;
+mod wheel_gesture_latching;
 mod whitespace_modes;
 
 #[test]
