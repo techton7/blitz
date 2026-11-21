@@ -275,7 +275,11 @@ impl ApplicationHandler for DioxusNativeApplication {
 
         // Flush reactive VirtualDom mutations immediately before the view redraws
         if let Some(window) = self.inner.windows.get_mut(&window_id) {
-            window.poll();
+            for _ in 0..4 {
+                if !window.poll() {
+                    break;
+                }
+            }
         }
 
         self.inner.window_event(event_loop, window_id, event);
