@@ -379,6 +379,8 @@ pub struct BaseDocument {
     pub(crate) active_animation_nodes: HashSet<NodeId>,
     /// Nodes with CSS transitions that still need an animation tick.
     pub(crate) active_transition_nodes: HashSet<NodeId>,
+    pub(crate) last_animation_time: f64,
+    pub(crate) resolve_generation: u64,
     /// Whether there is a `<canvas>` element in the DOM (so we should re-render every frame)
     pub(crate) has_canvas: bool,
     /// Whether there are subdocuments that are animating (so we should re-render every frame)
@@ -610,6 +612,8 @@ impl BaseDocument {
             has_active_animations: false,
             active_animation_nodes: HashSet::new(),
             active_transition_nodes: HashSet::new(),
+            last_animation_time: 0.0,
+            resolve_generation: 0,
             subdoc_is_animating: false,
             has_canvas: false,
             sub_document_nodes: HashSet::new(),
@@ -3125,6 +3129,14 @@ impl BaseDocument {
             | custom_widget_is_animating
             | (self.scroll_animation != ScrollAnimationState::None)
             | self.scrollbars_animating()
+    }
+
+    pub fn last_animation_time(&self) -> f64 {
+        self.last_animation_time
+    }
+
+    pub fn resolve_generation(&self) -> u64 {
+        self.resolve_generation
     }
 
     /// Record pending [`DeviceChanges`] and request a redraw so that they are
