@@ -96,6 +96,33 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         }
     }
 
+    fn is_redundant_mouse_pointer_move(&self, event: &BlitzPointerEvent) -> bool {
+        if !event.is_mouse() {
+            return false;
+        }
+
+        let pointer_id = event.id.to_dom_pointer_id();
+        let doc = self.doc.inner();
+        if doc.last_client_pointer_position.is_none() {
+            return false;
+        }
+        let Some(record) = doc.active_pointers.get(&pointer_id) else {
+            return false;
+        };
+
+        record.is_primary == event.is_primary
+            && record.buttons == event.buttons
+            && record.last_event.client_x() == event.client_x()
+            && record.last_event.client_y() == event.client_y()
+            && record.last_event.details.pressure == event.details.pressure
+            && record.last_event.details.tangential_pressure == event.details.tangential_pressure
+            && record.last_event.details.tilt_x == event.details.tilt_x
+            && record.last_event.details.tilt_y == event.details.tilt_y
+            && record.last_event.details.twist == event.details.twist
+            && record.last_event.details.altitude == event.details.altitude
+            && record.last_event.details.azimuth == event.details.azimuth
+    }
+
     fn upsert_active_pointer(
         &mut self,
         event: &BlitzPointerEvent,
@@ -442,15 +469,20 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
 
         match event {
             UiEvent::PointerMove(data) => {
-                let effective_target = self.handle_pointer_move(&data);
-                if let Some(target) = self.resolve_target_or_root(effective_target) {
-                    self.handle_pointer_event(
-                        target,
-                        data,
-                        DomEventData::PointerMove,
-                        Some(DomEventData::MouseMove),
-                        DomEventData::TouchMove,
-                    );
+                if self.is_redundant_mouse_pointer_move(&data) {
+                    let pointer_id = data.id.to_dom_pointer_id();
+                    self.process_pending_pointer_capture(pointer_id, &data);
+                } else {
+                    let effective_target = self.handle_pointer_move(&data);
+                    if let Some(target) = self.resolve_target_or_root(effective_target) {
+                        self.handle_pointer_event(
+                            target,
+                            data,
+                            DomEventData::PointerMove,
+                            Some(DomEventData::MouseMove),
+                            DomEventData::TouchMove,
+                        );
+                    }
                 }
             }
             UiEvent::PointerDown(mut data) => {

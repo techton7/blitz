@@ -73,6 +73,7 @@ mod pointer_capture;
 mod pointer_events;
 mod pointer_focus;
 mod pointer_leave;
+mod pointer_move_dedup;
 mod pointerdown_cancelled;
 mod pointerup_cancelled;
 mod pre_overflow_scroll;
