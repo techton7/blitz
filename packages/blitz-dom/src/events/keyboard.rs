@@ -79,7 +79,8 @@ pub(crate) fn handle_key_or_input_event(
             return;
         }
 
-        let is_active_focus = doc.is_node_displayed(node_id) && !doc.is_form_control_disabled(node_id);
+        let is_active_focus =
+            doc.is_node_displayed(node_id) && !doc.is_form_control_disabled(node_id);
         let has_text_input = doc.nodes[node_id]
             .element_data()
             .is_some_and(|el| el.text_input_data().is_some());
@@ -149,16 +150,20 @@ pub(crate) fn handle_key_or_input_event(
                         return;
                     }
                 }
-                Key::Character(s) if s == " " => {
-                    if !key_event.modifiers.intersects(
-                        Modifiers::CONTROL | Modifiers::ALT | Modifiers::META | Modifiers::SHIFT,
-                    ) && doc.is_space_activatable_element(node_id)
-                    {
-                        if !key_event.is_auto_repeating {
-                            doc.set_keyboard_active_node(node_id);
-                        }
-                        return;
+                Key::Character(s)
+                    if s == " "
+                        && !key_event.modifiers.intersects(
+                            Modifiers::CONTROL
+                                | Modifiers::ALT
+                                | Modifiers::META
+                                | Modifiers::SHIFT,
+                        )
+                        && doc.is_space_activatable_element(node_id) =>
+                {
+                    if !key_event.is_auto_repeating {
+                        doc.set_keyboard_active_node(node_id);
                     }
+                    return;
                 }
                 _ => {}
             }
