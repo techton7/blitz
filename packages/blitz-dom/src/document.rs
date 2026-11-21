@@ -2328,9 +2328,7 @@ impl BaseDocument {
             let Some(parent_id) = node.parent else {
                 return fully_resolved.then_some(false);
             };
-            let Some(parent) = self.get_node(parent_id) else {
-                return None;
-            };
+            let parent = self.get_node(parent_id)?;
             node = parent;
             if !node.is_element() {
                 return fully_resolved.then_some(false);
