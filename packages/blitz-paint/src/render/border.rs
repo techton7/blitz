@@ -686,13 +686,15 @@ impl ElementCx<'_, '_> {
     pub(crate) fn outline_bounds(&self) -> Option<Rect> {
         let outline = self.style.get_outline();
 
-        let style = match outline.outline_style {
-            OutlineStyle::Auto => return None,
-            OutlineStyle::BorderStyle(style) => style,
-        };
+        if matches!(
+            outline.outline_style,
+            OutlineStyle::BorderStyle(BorderStyle::None | BorderStyle::Hidden)
+        ) {
+            return None;
+        }
 
-        if matches!(style, BorderStyle::None | BorderStyle::Hidden)
-            || self.frame.outline_width <= 0.0
+        if self.frame.outline_width <= 0.0
+            || self.frame.outline_offset + self.frame.outline_width <= 0.0
         {
             return None;
         }
@@ -703,7 +705,7 @@ impl ElementCx<'_, '_> {
             .resolve_to_absolute(&current_color)
             .as_srgb_color();
 
-        if color.components[3] == 0.0 {
+        if color.components[3] <= 0.0 {
             return None;
         }
 
