@@ -261,9 +261,11 @@ impl ApplicationHandler for DioxusNativeApplication {
         if matches!(event, WindowEvent::RedrawRequested)
             && let Some(window) = self.inner.windows.get_mut(&window_id)
         {
+            window.poll();
             let animation_time = window.current_animation_time();
             window.doc.inner_mut().resolve(animation_time);
         }
+
         self.event_handlers
             .apply_event(window_id, &event, event_loop);
 
