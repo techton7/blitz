@@ -811,8 +811,8 @@ pub(crate) fn handle_click(doc: &mut BaseDocument, target: NodeId, event: &Blitz
                 local_name!("input") | local_name!("button")
                     if el.is_submit_button() || el.is_submit_input() =>
                 {
-                    if let Some(form_owner) = doc.controls_to_form.get(&node_id) {
-                        doc.submit_form(*form_owner, node_id);
+                    if let Some(form_owner) = doc.controls_to_form.get(&node_id).copied() {
+                        doc.queue_submit_form(form_owner, Some(node_id));
                     }
                     break 'matched;
                 }

@@ -9,6 +9,7 @@ use keyboard_types::{Code, Key, Location, Modifiers};
 use smol_str::SmolStr;
 
 use crate::NodeId;
+use crate::net::FormData;
 
 #[derive(Default)]
 pub struct EventState {
@@ -186,6 +187,8 @@ pub enum DomEventKind {
     FocusIn,
     FocusOut,
 
+    Submit,
+
     Load,
     Error,
 
@@ -252,6 +255,7 @@ impl FromStr for DomEventKind {
             "blur" => Ok(Self::Blur),
             "focusin" => Ok(Self::FocusIn),
             "focusout" => Ok(Self::FocusOut),
+            "submit" => Ok(Self::Submit),
             "animationstart" => Ok(Self::AnimationStart),
             "animationend" => Ok(Self::AnimationEnd),
             "animationiteration" => Ok(Self::AnimationIteration),
@@ -313,6 +317,8 @@ pub enum DomEventData {
     Blur(BlitzFocusEvent),
     FocusIn(BlitzFocusEvent),
     FocusOut(BlitzFocusEvent),
+
+    Submit(BlitzSubmitEvent),
 
     Load,
     Error,
@@ -385,6 +391,8 @@ impl DomEventData {
             Self::FocusIn { .. } => "focusin",
             Self::FocusOut { .. } => "focusout",
 
+            Self::Submit { .. } => "submit",
+
             Self::Load => "load",
             Self::Error => "error",
 
@@ -446,6 +454,8 @@ impl DomEventData {
             Self::Blur { .. } => DomEventKind::Blur,
             Self::FocusIn { .. } => DomEventKind::FocusIn,
             Self::FocusOut { .. } => DomEventKind::FocusOut,
+
+            Self::Submit { .. } => DomEventKind::Submit,
 
             Self::Load => DomEventKind::Load,
             Self::Error => DomEventKind::Error,
@@ -509,6 +519,8 @@ impl DomEventData {
             Self::FocusIn { .. } => false,
             Self::FocusOut { .. } => false,
 
+            Self::Submit { .. } => true,
+
             Self::Load => false,
             Self::Error => false,
 
@@ -569,6 +581,8 @@ impl DomEventData {
             Self::Blur { .. } => false,
             Self::FocusIn { .. } => true,
             Self::FocusOut { .. } => true,
+
+            Self::Submit { .. } => true,
 
             Self::Load => false,
             Self::Error => false,
@@ -943,6 +957,12 @@ pub struct BlitzInputEvent {
 }
 
 #[derive(Clone, Debug)]
+pub struct BlitzSubmitEvent {
+    pub submitter: Option<NodeId>,
+    pub entries: FormData,
+}
+
+#[derive(Clone, Debug)]
 pub struct BlitzFocusEvent;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1204,5 +1224,23 @@ mod tests {
             BlitzPointerId::Finger(u64::MAX).to_dom_pointer_id(),
             i32::MAX
         );
+    }
+
+    #[test]
+    fn submit_event_metadata_and_discriminants() {
+        let submit = DomEventData::Submit(BlitzSubmitEvent {
+            submitter: None,
+            entries: FormData::new(),
+        });
+
+        assert_eq!(submit.name(), "submit");
+        assert_eq!(submit.kind(), DomEventKind::Submit);
+        assert!(submit.bubbles());
+        assert!(submit.cancelable());
+        assert_eq!(submit.discriminant(), submit.kind().discriminant());
+        assert!((submit.discriminant() as usize) < 64);
+
+        assert_eq!("submit".parse::<DomEventKind>(), Ok(DomEventKind::Submit));
+        assert_eq!("onsubmit".parse::<DomEventKind>(), Ok(DomEventKind::Submit));
     }
 }

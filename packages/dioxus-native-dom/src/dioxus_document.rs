@@ -12,8 +12,9 @@ use blitz_dom::{
     EventHandler, Node,
 };
 use blitz_traits::events::{DomEvent, DomEventData, EventState, UiEvent};
+use blitz_traits::net::{Entry, EntryValue};
 use dioxus_core::{ElementId, Event, VirtualDom};
-use dioxus_html::{PlatformEventData, set_event_converter};
+use dioxus_html::{FormValue, PlatformEventData, set_event_converter};
 use futures_util::task::noop_waker;
 use std::cell::RefCell;
 use std::future::Future;
@@ -383,6 +384,23 @@ impl EventHandler for DioxusEventHandler<'_> {
                 Some(wrap_event_data(NativeFormData {
                     value: data.value.clone(),
                     values: vec![],
+                }))
+            }
+            DomEventData::Submit(data) => {
+                let values = data
+                    .entries
+                    .iter()
+                    .map(|Entry { name, value }| {
+                        let form_value = match value {
+                            EntryValue::String(s) => FormValue::Text(s.clone()),
+                            EntryValue::File(_) | EntryValue::EmptyFile => FormValue::File(None),
+                        };
+                        (name.clone(), form_value)
+                    })
+                    .collect();
+                Some(wrap_event_data(NativeFormData {
+                    value: String::new(),
+                    values,
                 }))
             }
             DomEventData::Load => Some(wrap_event_data(NativeImageData::new(false))),
@@ -1587,5 +1605,221 @@ mod tests {
             Some(first_handle.node_id())
         );
         assert!(!doc.inner.borrow().is_focus_visible(first_handle.node_id()));
+    }
+
+    #[test]
+    fn form_onsubmit_click_and_implicit_enter_with_prevent_default() {
+        use blitz_traits::events::{
+            BlitzKeyEvent, BlitzPointerEvent, BlitzPointerId, KeyState, MouseEventButton,
+            MouseEventButtons, Point, PointerCoords, PointerDetails,
+        };
+        use blitz_traits::navigation::{NavigationOptions, NavigationProvider};
+        use blitz_traits::shell::{ColorScheme, Viewport};
+        use dioxus_html::FormValue;
+        use keyboard_types::{Code, Key, Location, Modifiers, NamedKey};
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct RecordingNavProvider {
+            urls: Mutex<Vec<String>>,
+        }
+
+        impl NavigationProvider for RecordingNavProvider {
+            fn navigate_to(&self, options: NavigationOptions) {
+                self.urls.lock().unwrap().push(options.url.to_string());
+            }
+        }
+
+        struct SubmitState {
+            prevent_default: Cell<bool>,
+            submissions: RefCell<Vec<Vec<(String, FormValue)>>>,
+            button_node: RefCell<Option<Rc<MountedData>>>,
+            input_node: RefCell<Option<Rc<MountedData>>>,
+        }
+
+        impl Default for SubmitState {
+            fn default() -> Self {
+                Self {
+                    prevent_default: Cell::new(true),
+                    submissions: RefCell::new(Vec::new()),
+                    button_node: RefCell::new(None),
+                    input_node: RefCell::new(None),
+                }
+            }
+        }
+
+        fn click_node(doc: &mut DioxusDocument, mounted: &Rc<MountedData>) {
+            let node_id = mounted.downcast::<NodeHandle>().unwrap().node_id();
+            let rect = doc
+                .inner
+                .borrow()
+                .get_client_bounding_rect(node_id)
+                .expect("mounted node should have bounding rect");
+            let x = (rect.x + rect.width / 2.0) as f32;
+            let y = (rect.y + rect.height / 2.0) as f32;
+            let ptr = BlitzPointerEvent {
+                id: BlitzPointerId::Mouse,
+                is_primary: true,
+                coords: PointerCoords {
+                    page_x: x,
+                    page_y: y,
+                    screen_x: x,
+                    screen_y: y,
+                    client_x: x,
+                    client_y: y,
+                },
+                button: MouseEventButton::Main,
+                buttons: MouseEventButtons::from(MouseEventButton::Main),
+                mods: Default::default(),
+                details: PointerDetails::default(),
+                element: Point::default(),
+                active_pointers: Default::default(),
+            };
+            doc.handle_ui_event(UiEvent::PointerDown(ptr.clone()));
+            doc.handle_ui_event(UiEvent::PointerUp(ptr));
+            poll_until_idle(doc);
+        }
+
+        // Case 1: <button type="submit"> click
+        {
+            fn app() -> Element {
+                let state = consume_context::<Rc<SubmitState>>();
+                let state_submit = Rc::clone(&state);
+                let state_input = Rc::clone(&state);
+                let state_btn = Rc::clone(&state);
+                rsx! {
+                    form {
+                        action: "https://example.com/submit",
+                        onsubmit: move |evt| {
+                            state_submit.submissions.borrow_mut().push(evt.values());
+                            if state_submit.prevent_default.get() {
+                                evt.prevent_default();
+                            }
+                        },
+                        input {
+                            r#type: "text",
+                            name: "query",
+                            value: "hello",
+                            style: "display: block; width: 120px; height: 30px;",
+                            onmounted: move |e| *state_input.input_node.borrow_mut() = Some(e.data()),
+                        }
+                        button {
+                            r#type: "submit",
+                            style: "display: block; width: 100px; height: 30px;",
+                            onmounted: move |e| *state_btn.button_node.borrow_mut() = Some(e.data()),
+                            "Send"
+                        }
+                    }
+                }
+            }
+
+            let nav = Arc::new(RecordingNavProvider::default());
+            let state = Rc::new(SubmitState::default());
+            let vdom = VirtualDom::new(app).with_root_context(Rc::clone(&state));
+            let mut doc = DioxusDocument::new(
+                vdom,
+                DocumentConfig {
+                    viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+                    navigation_provider: Some(Arc::clone(&nav) as _),
+                    ..Default::default()
+                },
+            );
+            doc.initial_build();
+            doc.inner.borrow_mut().resolve(0.0);
+
+            let btn = state.button_node.borrow().clone().unwrap();
+            click_node(&mut doc, &btn);
+            assert_eq!(
+                *state.submissions.borrow(),
+                vec![vec![("query".to_string(), FormValue::Text("hello".to_string()))]]
+            );
+            assert!(
+                nav.urls.lock().unwrap().is_empty(),
+                "prevent_default() should cancel form navigation"
+            );
+
+            state.prevent_default.set(false);
+            click_node(&mut doc, &btn);
+            assert_eq!(state.submissions.borrow().len(), 2);
+            assert_eq!(
+                *nav.urls.lock().unwrap(),
+                vec!["https://example.com/submit?query=hello".to_string()]
+            );
+        }
+
+        // Case 2: Enter implicit form submission in text input (no submit button)
+        {
+            fn app() -> Element {
+                let state = consume_context::<Rc<SubmitState>>();
+                let state_submit = Rc::clone(&state);
+                let state_input = Rc::clone(&state);
+                rsx! {
+                    form {
+                        action: "https://example.com/search",
+                        onsubmit: move |evt| {
+                            state_submit.submissions.borrow_mut().push(evt.values());
+                            if state_submit.prevent_default.get() {
+                                evt.prevent_default();
+                            }
+                        },
+                        input {
+                            r#type: "text",
+                            name: "q",
+                            value: "blitz",
+                            style: "display: block; width: 120px; height: 30px;",
+                            onmounted: move |e| *state_input.input_node.borrow_mut() = Some(e.data()),
+                        }
+                    }
+                }
+            }
+
+            let nav = Arc::new(RecordingNavProvider::default());
+            let state = Rc::new(SubmitState::default());
+            let vdom = VirtualDom::new(app).with_root_context(Rc::clone(&state));
+            let mut doc = DioxusDocument::new(
+                vdom,
+                DocumentConfig {
+                    viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+                    navigation_provider: Some(Arc::clone(&nav) as _),
+                    ..Default::default()
+                },
+            );
+            doc.initial_build();
+            doc.inner.borrow_mut().resolve(0.0);
+
+            let input = state.input_node.borrow().clone().unwrap();
+            click_node(&mut doc, &input);
+
+            let enter_event = BlitzKeyEvent {
+                key: Key::Named(NamedKey::Enter),
+                code: Code::Enter,
+                modifiers: Modifiers::empty(),
+                location: Location::Standard,
+                is_auto_repeating: false,
+                is_composing: false,
+                state: KeyState::Pressed,
+                text: None,
+            };
+
+            doc.handle_ui_event(UiEvent::KeyDown(enter_event.clone()));
+            poll_until_idle(&mut doc);
+            assert_eq!(
+                *state.submissions.borrow(),
+                vec![vec![("q".to_string(), FormValue::Text("blitz".to_string()))]]
+            );
+            assert!(
+                nav.urls.lock().unwrap().is_empty(),
+                "prevent_default() should cancel implicit Enter form navigation"
+            );
+
+            state.prevent_default.set(false);
+            doc.handle_ui_event(UiEvent::KeyDown(enter_event));
+            poll_until_idle(&mut doc);
+            assert_eq!(state.submissions.borrow().len(), 2);
+            assert_eq!(
+                *nav.urls.lock().unwrap(),
+                vec!["https://example.com/search?q=blitz".to_string()]
+            );
+        }
     }
 }

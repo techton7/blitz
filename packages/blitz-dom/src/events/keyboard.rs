@@ -431,5 +431,5 @@ fn implicit_form_submission(doc: &mut BaseDocument, text_target: NodeId) {
         return;
     }
 
-    doc.submit_form(form_owner_id, form_owner_id);
+    doc.queue_submit_form(form_owner_id, None);
 }
