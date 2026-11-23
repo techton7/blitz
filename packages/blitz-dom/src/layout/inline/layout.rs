@@ -1325,6 +1325,28 @@ impl LayoutPassState<'_> {
 
         if inputs.run_mode == RunMode::PerformLayout {
             inline_layout.span_cb_flags = span_cb_flags;
+            inline_layout.performed = Some(crate::node::PerformedLines {
+                max_advance,
+                text_indent: resolved_text_indent * scale,
+                indent_options,
+                alignment,
+                last_line_alignment,
+            });
+        } else if let Some(performed) = inline_layout.performed
+            && performed.max_advance != max_advance
+        {
+            // A measuring run: leave the lines as the last final layout broke them, which are
+            // the ones painted until the next final layout (which may come from the cache).
+            let layout = &mut inline_layout.layout;
+            layout.set_text_indent(performed.text_indent, performed.indent_options);
+            layout.set_alignment(
+                performed.alignment,
+                AlignmentOptions {
+                    align_when_overflowing: false,
+                    last_line_alignment: performed.last_line_alignment,
+                },
+            );
+            layout.break_all_lines(Some(performed.max_advance));
         }
 
         // Put layout back
@@ -1397,4 +1419,257 @@ impl LayoutPassState<'_> {
 #[inline(always)]
 fn f32_max(a: f32, b: f32) -> f32 {
     a.max(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use blitz_traits::shell::{ColorScheme, Viewport};
+    use taffy::{AvailableSpace, LayoutInput, RequestedAxis, RunMode, Size, SizingMode};
+
+    use crate::layout::LayoutPassState;
+    use crate::{Attribute, BaseDocument, DocumentConfig, NodeId, qual_name};
+
+    fn style_attr(value: &str) -> Attribute {
+        Attribute {
+            name: qual_name!("style"),
+            value: value.to_string(),
+        }
+    }
+
+    fn lines(document: &BaseDocument, text: NodeId) -> usize {
+        let node = document.get_node(text).unwrap();
+        let layout = node
+            .element_data()
+            .unwrap()
+            .inline_layout_data
+            .as_ref()
+            .unwrap();
+        layout.layout.lines().count()
+    }
+
+    fn button_inline_lines(document: &BaseDocument, button_id: NodeId) -> usize {
+        let node = document.get_node(button_id).unwrap();
+        if let Some(layout) = node
+            .element_data()
+            .and_then(|el| el.inline_layout_data.as_deref())
+        {
+            return layout.layout.lines().count();
+        }
+        let children = node.layout_children.borrow();
+        let child_id = children.as_ref().unwrap()[0];
+        let child = document.get_node(child_id).unwrap();
+        child
+            .element_data()
+            .unwrap()
+            .inline_layout_data
+            .as_deref()
+            .unwrap()
+            .layout
+            .lines()
+            .count()
+    }
+
+    /// A flex container measures its items again on later passes (at min-content width,
+    /// among others) while their final layout comes from Taffy's cache. A measuring run must
+    /// leave the lines that are painted as the final layout broke them.
+    #[test]
+    fn measuring_keeps_the_lines_of_the_final_layout() {
+        let mut document = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(800, 600, 1.0, ColorScheme::Light)),
+            ..Default::default()
+        });
+        let root_id = document.root_node().id;
+        let text = {
+            let mut m = document.mutate();
+            let html = m.create_element(qual_name!("html", html), vec![]);
+            m.append_children(root_id, &[html]);
+            let text = m.create_element(qual_name!("div", html), vec![]);
+            m.append_children(html, &[text]);
+            let words = m.create_text_node("Hi! Is this still the number for the flat viewing?");
+            m.append_children(text, &[words]);
+            text
+        };
+        document.resolve(0.0);
+        assert_eq!(lines(&document, text), 1);
+
+        // A measuring run at a narrow width, as a flex container sizing its item does.
+        let narrow = 30.0;
+        let measured = LayoutPassState::new(&mut document).compute_inline_layout(
+            text,
+            LayoutInput {
+                run_mode: RunMode::ComputeSize,
+                sizing_mode: SizingMode::ContentSize,
+                axis: RequestedAxis::Vertical,
+                known_dimensions: Size {
+                    width: Some(narrow),
+                    height: None,
+                },
+                available_space: Size {
+                    width: AvailableSpace::Definite(narrow),
+                    height: AvailableSpace::MaxContent,
+                },
+                ..LayoutInput::HIDDEN
+            },
+            None,
+        );
+        assert!(
+            measured.size.height > 50.0,
+            "the narrow text is measured tall"
+        );
+        assert_eq!(
+            lines(&document, text),
+            1,
+            "the painted lines are the final layout's"
+        );
+    }
+
+    /// Shrink-to-fit inline layouts (#1449) add a few ulps of rounding-error slack to
+    /// `max_advance`; restoring lines after a measuring pass must use that `max_advance`
+    /// rather than raw `width` so exact-fit text does not wrap when restored.
+    #[test]
+    fn measuring_preserves_shrink_to_fit_max_advance_slack() {
+        let mut document = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(800, 600, 1.0, ColorScheme::Light)),
+            ..Default::default()
+        });
+        let root_id = document.root_node().id;
+        let text = {
+            let mut m = document.mutate();
+            let html = m.create_element(qual_name!("html", html), vec![]);
+            let body = m.create_element(qual_name!("body", html), vec![style_attr("margin: 0;")]);
+            let inline_block = m.create_element(
+                qual_name!("div", html),
+                vec![style_attr(
+                    "display: inline-block; padding: 0 13.7px; font-size: 14px;",
+                )],
+            );
+            let words = m.create_text_node("Hover Inline Shrink Fit");
+            m.append_children(inline_block, &[words]);
+            m.append_children(body, &[inline_block]);
+            m.append_children(html, &[body]);
+            m.append_children(root_id, &[html]);
+            inline_block
+        };
+        document.resolve(0.0);
+        assert_eq!(lines(&document, text), 1);
+
+        let performed = document
+            .get_node(text)
+            .unwrap()
+            .element_data()
+            .unwrap()
+            .inline_layout_data
+            .as_ref()
+            .unwrap()
+            .performed
+            .expect("PerformLayout should record PerformedLines");
+        let max_content_width = document
+            .get_node(text)
+            .unwrap()
+            .element_data()
+            .unwrap()
+            .inline_layout_data
+            .as_ref()
+            .unwrap()
+            .layout
+            .calculate_content_widths()
+            .max;
+        assert!(
+            performed.max_advance > max_content_width,
+            "shrink-to-fit PerformLayout should record #1449 rounding-error slack in max_advance"
+        );
+
+        let narrow = 30.0;
+        let _ = LayoutPassState::new(&mut document).compute_inline_layout(
+            text,
+            LayoutInput {
+                run_mode: RunMode::ComputeSize,
+                sizing_mode: SizingMode::ContentSize,
+                axis: RequestedAxis::Vertical,
+                known_dimensions: Size {
+                    width: Some(narrow),
+                    height: None,
+                },
+                available_space: Size {
+                    width: AvailableSpace::Definite(narrow),
+                    height: AvailableSpace::MaxContent,
+                },
+                ..LayoutInput::HIDDEN
+            },
+            None,
+        );
+        assert_eq!(lines(&document, text), 1);
+    }
+
+    #[test]
+    fn inline_flex_button_keeps_single_line_across_sibling_mount_and_transition() {
+        let mut doc = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(800, 600, 1.0, ColorScheme::Light)),
+            incremental: Some(true),
+            ..Default::default()
+        });
+        let root_id = doc.root_node().id;
+        let (col_id, button_id) = {
+            let mut m = doc.mutate();
+            let html = m.create_element(qual_name!("html", html), vec![]);
+            let body = m.create_element(qual_name!("body", html), vec![style_attr("margin: 0;")]);
+            let ul = m.create_element(
+                qual_name!("ul", html),
+                vec![style_attr(
+                    "display: flex; flex-direction: row; align-items: flex-start; gap: 12px; list-style: none; margin: 0; padding: 0;",
+                )],
+            );
+            let col = m.create_element(
+                qual_name!("li", html),
+                vec![style_attr(
+                    "display: flex; flex-direction: column; gap: 8px;",
+                )],
+            );
+            let button = m.create_element(
+                qual_name!("button", html),
+                vec![style_attr(
+                    "box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 14px; border: 1px solid #cbd5e1; font-size: 14px; font-weight: 600; transition: border-color 150ms ease;",
+                )],
+            );
+            let label = m.create_text_node("Hover Inline");
+            m.append_children(button, &[label]);
+            m.append_children(col, &[button]);
+            m.append_children(ul, &[col]);
+            m.append_children(body, &[ul]);
+            m.append_children(html, &[body]);
+            m.append_children(root_id, &[html]);
+            (col, button)
+        };
+
+        doc.resolve(0.0);
+        assert_eq!(button_inline_lines(&doc, button_id), 1);
+
+        // Mount a 220px sibling inside the column item and trigger a border-color transition
+        // on the inline-flex button.
+        {
+            let mut m = doc.mutate();
+            let content = m.create_element(
+                qual_name!("div", html),
+                vec![style_attr(
+                    "box-sizing: border-box; width: 220px; height: 40px;",
+                )],
+            );
+            m.append_children(col_id, &[content]);
+            m.set_style_property(button_id, "border-color", "#8b5cf6");
+        }
+        doc.resolve(0.0);
+        assert_eq!(
+            button_inline_lines(&doc, button_id),
+            1,
+            "button text should stay on one line after 220px sibling mounts"
+        );
+
+        // Advance transition tick to trigger incremental relayout while button layout hits cache.
+        doc.resolve(0.05);
+        assert_eq!(
+            button_inline_lines(&doc, button_id),
+            1,
+            "button text should stay on one line during transition relayout"
+        );
+    }
 }

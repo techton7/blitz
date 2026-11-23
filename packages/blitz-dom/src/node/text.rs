@@ -37,6 +37,23 @@ pub struct TextLayout {
     /// `final_layout`. Paint draws text from the unrounded origin so that it keeps its sub-pixel
     /// position while box edges stay snapped. Set by the `writing-mode` layout pass; zero otherwise.
     pub content_box_subpixel_offset: taffy::Point<f32>,
+    /// How the last `RunMode::PerformLayout` run broke and aligned the lines: the lines that are
+    /// painted. A measuring run breaks them again at the width it measures with (min-content,
+    /// say); when the final layout then comes from Taffy's cache, nothing would break them back,
+    /// and the text would be painted as measured. See `compute_inline_layout_inner`.
+    pub performed: Option<PerformedLines>,
+}
+
+/// See [`TextLayout::performed`].
+#[derive(Clone, Copy, Debug)]
+pub struct PerformedLines {
+    /// The line max advance (scaled, including any shrink-to-fit rounding-error slack from
+    /// `#1449`), as passed to `break_all_lines` / `set_layout_max_advance`.
+    pub max_advance: f32,
+    pub text_indent: f32,
+    pub indent_options: parley::IndentOptions,
+    pub alignment: parley::layout::Alignment,
+    pub last_line_alignment: Option<parley::layout::Alignment>,
 }
 
 impl TextLayout {
