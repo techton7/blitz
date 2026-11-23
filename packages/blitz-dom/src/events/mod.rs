@@ -96,7 +96,10 @@ fn map_dom_event_to_ui_event(
         DomEventData::ContextMenu(_) => None,
         DomEventData::DoubleClick(_) => None,
         DomEventData::Input(_) | DomEventData::Change(_) => None,
-        DomEventData::Wheel(data) => Some(UiEvent::Wheel(data)),
+        DomEventData::Wheel(mut data) => {
+            adjust_coords_for_subdocument(&mut data.coords, node_offset, viewport_scroll);
+            Some(UiEvent::Wheel(data))
+        }
         DomEventData::Scroll(_) => None,
         DomEventData::Focus(_) => None,
         DomEventData::Blur(_) => None,
@@ -229,15 +232,27 @@ pub(crate) fn handle_dom_event(
         let viewport_scroll = Point { x: 0.0, y: 0.0 };
         let ui_event = map_dom_event_to_ui_event(event, pos, viewport_scroll);
 
-        if let Some(ui_event) = ui_event {
-            widget_data.widget.handle_event(&ui_event);
-        }
+        let handled = ui_event
+            .as_ref()
+            .is_some_and(|ui_event| widget_data.widget.handle_ui_event(ui_event));
 
         if set_focus {
             doc.set_focus_to_with_source(target_node_id, FocusSource::Pointer);
         }
 
-        return;
+        match &event.data {
+            DomEventData::Wheel(data) if handled => {
+                doc.wheel_gesture.track(data);
+                return;
+            }
+            DomEventData::Wheel(_) => {}
+            DomEventData::PointerMove(data) => {
+                doc.wheel_gesture
+                    .on_pointer_move(data.client_x(), data.client_y());
+                return;
+            }
+            _ => return,
+        }
     }
 
     match &event.data {
