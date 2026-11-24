@@ -132,7 +132,7 @@ pub(crate) fn handle_dom_event(
         match &event.data {
             // A scroll gesture has to see each of its events to know where it starts and ends.
             DomEventData::Wheel(data) => {
-                doc.wheel_gesture.track(data);
+                doc.wheel_gesture.track_prevented(data);
             }
             DomEventData::PointerMove(data) => {
                 doc.wheel_gesture
@@ -148,8 +148,7 @@ pub(crate) fn handle_dom_event(
                 handle_pointerup(doc, event.target, click_target, data, true);
             }
             // A prevented key release still disarms an active Space key press
-            DomEventData::KeyUp(data)
-                if matches!(&data.key, keyboard_types::Key::Character(s) if s == " ") =>
+            DomEventData::KeyUp(data) if matches!(&data.key, keyboard_types::Key::Character(s) if s == " ") =>
             {
                 doc.clear_keyboard_active_node();
             }
@@ -198,8 +197,12 @@ pub(crate) fn handle_dom_event(
         _ => false,
     };
 
+    // Non-cancelable wheel events belong to an already-latched outer scroll transaction,
+    // so embedded sub-documents and custom widgets must not intercept them.
+    let bypass_embedded_wheel = matches!(event.data, DomEventData::Wheel(_)) && !event.cancelable;
+
     // Handle event forwarding for sub-document
-    if let Some(sub_doc) = node.subdoc_mut() {
+    if !bypass_embedded_wheel && let Some(sub_doc) = node.subdoc_mut() {
         let viewport_scroll = sub_doc.inner().viewport_scroll();
 
         let set_focus = matches!(
@@ -221,9 +224,10 @@ pub(crate) fn handle_dom_event(
 
     // Handle event forwarding for custom widget
     #[cfg(feature = "custom-widget")]
-    if let Some(widget_data) = node
-        .element_data_mut()
-        .and_then(|el| el.custom_widget_data_mut())
+    if !bypass_embedded_wheel
+        && let Some(widget_data) = node
+            .element_data_mut()
+            .and_then(|el| el.custom_widget_data_mut())
     {
         let set_focus = matches!(
             &event.data,

@@ -49,6 +49,7 @@ pub(crate) struct WheelGesture {
     phase: WheelGesturePhase,
     latched_x: Option<ScrollTarget>,
     latched_y: Option<ScrollTarget>,
+    wheel_target: Option<NodeId>,
     wheel_latch: Option<(Instant, f32, f32)>,
     last_pointer: Option<(f32, f32)>,
 }
@@ -62,10 +63,15 @@ impl WheelGesture {
     const WHEEL_LATCH_TIMEOUT: Duration = Duration::from_millis(500);
     const POINTER_MOVE_THRESHOLD: f32 = 0.5;
 
-    pub(crate) fn clear_target_latch(&mut self) {
+    fn clear_scroll_latch(&mut self) {
         self.latched_x = None;
         self.latched_y = None;
         self.wheel_latch = None;
+    }
+
+    pub(crate) fn clear_target_latch(&mut self) {
+        self.clear_scroll_latch();
+        self.wheel_target = None;
     }
 
     pub(crate) fn clear_latched_node(&mut self, node_id: NodeId) {
@@ -75,6 +81,9 @@ impl WheelGesture {
         }
         if self.latched_y == target {
             self.latched_y = None;
+        }
+        if self.wheel_target == Some(node_id) {
+            self.wheel_target = None;
         }
     }
 
@@ -93,12 +102,110 @@ impl WheelGesture {
         }
     }
 
-    /// Place a wheel event in the gesture, returning the axes its default scroll moves.
-    ///
-    /// Every wheel event must pass through here exactly once, including those whose default
-    /// scroll is prevented, or the gesture loses track of where it starts and ends.
+    fn is_wheel_burst_active(&self, now: Instant, cx: f32, cy: f32) -> bool {
+        self.wheel_latch.is_some_and(|(t, lx, ly)| {
+            now.saturating_duration_since(t) <= Self::WHEEL_LATCH_TIMEOUT
+                && (cx - lx).abs() <= Self::POINTER_MOVE_THRESHOLD
+                && (cy - ly).abs() <= Self::POINTER_MOVE_THRESHOLD
+        })
+    }
+
+    pub(crate) fn has_active_latch_for(&self, doc: &BaseDocument, event: &BlitzWheelEvent) -> bool {
+        let has_valid_x = self
+            .latched_x
+            .is_some_and(|t| doc.is_valid_scroll_target(t));
+        let has_valid_y = self
+            .latched_y
+            .is_some_and(|t| doc.is_valid_scroll_target(t));
+
+        if event.source == BlitzWheelSource::Wheel {
+            if !matches!(self.phase, WheelGesturePhase::Idle) {
+                return false;
+            }
+            if !self.is_wheel_burst_active(Instant::now(), event.client_x(), event.client_y()) {
+                return false;
+            }
+            let (raw_x, raw_y) = event.delta.to_pixels(WHEEL_LINE_PX);
+            return (raw_x != 0.0 && has_valid_x) || (raw_y != 0.0 && has_valid_y);
+        }
+
+        let continuing_gesture = match self.phase {
+            WheelGesturePhase::Active { .. } => event.phase != BlitzWheelPhase::Started,
+            WheelGesturePhase::Lifted { .. } => {
+                event.phase == BlitzWheelPhase::Started
+                    && event.source == BlitzWheelSource::Momentum
+            }
+            WheelGesturePhase::Idle => false,
+        };
+        continuing_gesture && (has_valid_x || has_valid_y)
+    }
+
+    pub(crate) fn begin_wheel_dispatch(
+        &mut self,
+        doc: &BaseDocument,
+        event: &BlitzWheelEvent,
+        fallback_target: NodeId,
+    ) -> (NodeId, bool) {
+        let cancelable = !self.has_active_latch_for(doc, event);
+        let now = Instant::now();
+        let (cx, cy) = (event.client_x(), event.client_y());
+
+        if event.source == BlitzWheelSource::Wheel {
+            if !matches!(self.phase, WheelGesturePhase::Idle) {
+                self.phase = WheelGesturePhase::Idle;
+                self.clear_target_latch();
+            }
+            if self.is_wheel_burst_active(now, cx, cy) {
+                if let Some((_, lx, ly)) = self.wheel_latch {
+                    self.wheel_latch = Some((now, lx, ly));
+                }
+            } else {
+                self.clear_target_latch();
+                self.wheel_target = Some(fallback_target);
+                self.wheel_latch = Some((now, cx, cy));
+                self.last_pointer = Some((cx, cy));
+            }
+        } else {
+            let started = event.phase == BlitzWheelPhase::Started;
+            let continuing_momentum = matches!(self.phase, WheelGesturePhase::Lifted { .. })
+                && started
+                && event.source == BlitzWheelSource::Momentum;
+            if started && !continuing_momentum {
+                self.clear_target_latch();
+                self.wheel_target = Some(fallback_target);
+                self.last_pointer = Some((cx, cy));
+            } else if matches!(
+                self.phase,
+                WheelGesturePhase::Idle | WheelGesturePhase::Lifted { .. }
+            ) && !continuing_momentum
+            {
+                self.clear_target_latch();
+            }
+        }
+
+        let target = self
+            .wheel_target
+            .filter(|&id| doc.get_node(id).is_some_and(|n| n.flags.is_in_document()))
+            .unwrap_or(fallback_target);
+        (target, cancelable)
+    }
+
+    /// Place a wheel event consumed outside [`handle_wheel`] in the gesture, keeping any
+    /// active target latch alive until the gesture ends.
     pub(crate) fn track(&mut self, event: &BlitzWheelEvent) -> WheelAxes {
-        self.track_event(event, true).0
+        let (axes, mode) = self.track_event(event, false);
+        if matches!(mode, LatchMode::Gesture { ends: true }) {
+            self.clear_target_latch();
+        }
+        axes
+    }
+
+    /// Place a default-prevented wheel event in the gesture, returning the axes its default
+    /// scroll would move and clearing any latched target.
+    pub(crate) fn track_prevented(&mut self, event: &BlitzWheelEvent) -> WheelAxes {
+        let (axes, _) = self.track_event(event, true);
+        self.clear_target_latch();
+        axes
     }
 
     fn track_event(
@@ -113,12 +220,7 @@ impl WheelGesture {
             }
             let now = Instant::now();
             let (cx, cy) = (event.client_x(), event.client_y());
-            let keep_latch = self.wheel_latch.is_some_and(|(t, lx, ly)| {
-                now.saturating_duration_since(t) <= Self::WHEEL_LATCH_TIMEOUT
-                    && (cx - lx).abs() <= Self::POINTER_MOVE_THRESHOLD
-                    && (cy - ly).abs() <= Self::POINTER_MOVE_THRESHOLD
-            });
-            if !keep_latch {
+            if !self.is_wheel_burst_active(now, cx, cy) {
                 self.clear_target_latch();
             }
             return (WheelAxes::Both, LatchMode::Wheel);
@@ -132,7 +234,7 @@ impl WheelGesture {
                 recent
             }
             _ if started => {
-                self.clear_target_latch();
+                self.clear_scroll_latch();
                 (0.0, 0.0)
             }
             WheelGesturePhase::Active { recent } => recent,

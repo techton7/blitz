@@ -686,11 +686,18 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             }
             UiEvent::Wheel(data) => {
                 if let Some(target) = self.resolve_target_or_root(hover_node_id) {
-                    self.handle_dom_event(DomEvent::new(
+                    let mut doc = self.doc.inner_mut();
+                    let mut gesture = doc.wheel_gesture;
+                    let (target, cancelable) = gesture.begin_wheel_dispatch(&doc, &data, target);
+                    doc.wheel_gesture = gesture;
+                    drop(doc);
+                    let mut dom_event = DomEvent::new(
                         target,
                         DomEventData::Wheel(data),
                         EventDispatchSource::Input,
-                    ));
+                    );
+                    dom_event.cancelable = cancelable;
+                    self.handle_dom_event(dom_event);
                 }
             }
             UiEvent::KeyUp(data) => {
@@ -766,11 +773,8 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             if self.doc.inner().get_node(queued.node_id).is_none() {
                 continue;
             }
-            let dom_event = DomEvent::new(
-                queued.node_id,
-                queued.event,
-                EventDispatchSource::UserAgent,
-            );
+            let dom_event =
+                DomEvent::new(queued.node_id, queued.event, EventDispatchSource::UserAgent);
             self.handle_dom_event(dom_event);
         }
     }
@@ -806,19 +810,13 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         if !event_state.is_cancelled() {
             if data.is_mouse() {
                 if let Some(make_mouse_data) = make_mouse_data {
-                    let mut mouse_event = DomEvent::new(
-                        target,
-                        make_mouse_data(data),
-                        EventDispatchSource::Input,
-                    );
+                    let mut mouse_event =
+                        DomEvent::new(target, make_mouse_data(data), EventDispatchSource::Input);
                     event_state = self.run_handler_event(&mut mouse_event, event_state);
                 }
             } else if data.is_finger() || data.is_pen() {
-                let mut touch_event = DomEvent::new(
-                    target,
-                    make_touch_data(data),
-                    EventDispatchSource::Input,
-                );
+                let mut touch_event =
+                    DomEvent::new(target, make_touch_data(data), EventDispatchSource::Input);
                 event_state = self.run_handler_event(&mut touch_event, event_state);
             }
         }
