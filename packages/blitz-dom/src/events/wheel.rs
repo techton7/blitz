@@ -146,6 +146,9 @@ impl WheelGesture {
         event: &BlitzWheelEvent,
         fallback_target: NodeId,
     ) -> (NodeId, bool) {
+        if event.mods.contains(keyboard_types::Modifiers::CONTROL) {
+            return (fallback_target, true);
+        }
         let cancelable = !self.has_active_latch_for(doc, event);
         let now = Instant::now();
         let (cx, cy) = (event.client_x(), event.client_y());
@@ -356,6 +359,9 @@ fn scroll_latched(
 }
 
 pub(crate) fn handle_wheel(doc: &mut BaseDocument, _: NodeId, event: BlitzWheelEvent) {
+    if event.mods.contains(keyboard_types::Modifiers::CONTROL) {
+        return;
+    }
     let (raw_x, raw_y) = event.delta.to_pixels(WHEEL_LINE_PX);
     let (axes, mode) = doc.wheel_gesture.track_event(&event, false);
     let (scroll_x, scroll_y) = match axes {

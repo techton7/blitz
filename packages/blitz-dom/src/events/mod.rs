@@ -132,7 +132,9 @@ pub(crate) fn handle_dom_event(
         match &event.data {
             // A scroll gesture has to see each of its events to know where it starts and ends.
             DomEventData::Wheel(data) => {
-                doc.wheel_gesture.track_prevented(data);
+                if !data.mods.contains(keyboard_types::Modifiers::CONTROL) {
+                    doc.wheel_gesture.track_prevented(data);
+                }
             }
             DomEventData::PointerMove(data) => {
                 doc.wheel_gesture
@@ -246,7 +248,9 @@ pub(crate) fn handle_dom_event(
 
         match &event.data {
             DomEventData::Wheel(data) if handled => {
-                doc.wheel_gesture.track(data);
+                if !data.mods.contains(keyboard_types::Modifiers::CONTROL) {
+                    doc.wheel_gesture.track(data);
+                }
                 return;
             }
             DomEventData::Wheel(_) => {}

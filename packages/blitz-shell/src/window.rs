@@ -935,7 +935,27 @@ impl<Rend: WindowRenderer> View<Rend> {
             }
             WindowEvent::Focused(_) => {}
             WindowEvent::TouchpadPressure { .. } => {}
-            WindowEvent::PinchGesture { .. } => {},
+            WindowEvent::PinchGesture { delta, phase, .. } => {
+                if delta.is_finite() && delta != 0.0 {
+                    let event = BlitzWheelEvent {
+                        delta: BlitzWheelDelta::Pixels(0.0, 100.0 * delta),
+                        phase: match phase {
+                            winit::event::TouchPhase::Started => BlitzWheelPhase::Started,
+                            winit::event::TouchPhase::Moved => BlitzWheelPhase::Moved,
+                            winit::event::TouchPhase::Ended => BlitzWheelPhase::Ended,
+                            winit::event::TouchPhase::Cancelled => BlitzWheelPhase::Cancelled,
+                        },
+                        source: BlitzWheelSource::Finger,
+                        coords: self.pointer_coords(self.pointer_pos),
+                        buttons: self.buttons,
+                        mods: winit_modifiers_to_kbt_modifiers(self.keyboard_modifiers.state())
+                            | keyboard_types::Modifiers::CONTROL,
+                        element: Default::default(),
+                    };
+
+                    self.doc.handle_ui_event(UiEvent::Wheel(event));
+                }
+            }
             WindowEvent::PanGesture { .. } => {},
             WindowEvent::DoubleTapGesture { .. } => {},
             WindowEvent::RotationGesture { .. } => {},
