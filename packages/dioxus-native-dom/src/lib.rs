@@ -18,8 +18,8 @@ pub use blitz_dom::{DocumentConfig, FocusOptions, FocusSource, PointerCaptureErr
 pub use blitz_traits::events::{BlitzWheelPhase, BlitzWheelSource};
 pub use dioxus_document::DioxusDocument;
 pub use events::{
-    NativePointerData, NativeWheelData, NodeHandle, synthetic_click_event, synthetic_form_event,
-    synthetic_keyboard_event,
+    NativeFocusData, NativePointerData, NativeScrollData, NativeTouchData, NativeWheelData,
+    NodeHandle, synthetic_click_event, synthetic_form_event, synthetic_keyboard_event,
 };
 pub use write_once_attr::{CustomWidgetAttr, SubDocumentAttr};
 

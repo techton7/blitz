@@ -603,6 +603,12 @@ impl HasPointerData for NativePointerData {
 #[derive(Clone)]
 pub struct NativeTouchData(pub(crate) BlitzPointerEvent);
 
+impl NativeTouchData {
+    pub fn new(event: BlitzPointerEvent) -> Self {
+        Self(event)
+    }
+}
+
 impl ModifiersInteraction for NativeTouchData {
     fn modifiers(&self) -> Modifiers {
         self.0.mods
@@ -687,6 +693,12 @@ impl HasFocusData for NativeFocusData {
 
 #[derive(Clone)]
 pub struct NativeScrollData(pub(crate) BlitzScrollEvent);
+
+impl NativeScrollData {
+    pub fn new(event: BlitzScrollEvent) -> Self {
+        Self(event)
+    }
+}
 impl HasScrollData for NativeScrollData {
     fn as_any(&self) -> &dyn Any {
         self as &dyn Any
@@ -724,6 +736,10 @@ impl HasScrollData for NativeScrollData {
 pub struct NativeWheelData(pub(crate) BlitzWheelEvent);
 
 impl NativeWheelData {
+    pub fn new(event: BlitzWheelEvent) -> Self {
+        Self(event)
+    }
+
     /// Where the event falls in its gesture, as when the fingers land on or lift from
     /// a trackpad. [`BlitzWheelPhase::Moved`] on a device that reports no gestures.
     pub fn phase(&self) -> BlitzWheelPhase {
