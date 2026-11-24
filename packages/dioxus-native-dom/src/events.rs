@@ -529,13 +529,14 @@ impl ModifiersInteraction for NativePointerData {
 
 impl PointerInteraction for NativePointerData {
     fn trigger_button(&self) -> Option<MouseButton> {
-        Some(match self.event.button {
-            MouseEventButton::Main => MouseButton::Primary,
-            MouseEventButton::Auxiliary => MouseButton::Auxiliary,
-            MouseEventButton::Secondary => MouseButton::Secondary,
-            MouseEventButton::Fourth => MouseButton::Fourth,
-            MouseEventButton::Fifth => MouseButton::Fifth,
-        })
+        match self.event.button {
+            MouseEventButton::None => None,
+            MouseEventButton::Main => Some(MouseButton::Primary),
+            MouseEventButton::Auxiliary => Some(MouseButton::Auxiliary),
+            MouseEventButton::Secondary => Some(MouseButton::Secondary),
+            MouseEventButton::Fourth => Some(MouseButton::Fourth),
+            MouseEventButton::Fifth => Some(MouseButton::Fifth),
+        }
     }
 
     fn held_buttons(&self) -> MouseButtonSet {

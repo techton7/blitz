@@ -125,7 +125,7 @@ impl<D: Document> Harness<D> {
             BlitzPointerId::Mouse,
             x,
             y,
-            MouseEventButton::Main,
+            MouseEventButton::None,
             MouseEventButtons::empty(),
             Modifiers::default(),
         );

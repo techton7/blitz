@@ -2300,7 +2300,7 @@ impl Node {
                 client_y: y,
             },
             mods,
-            button: Default::default(),
+            button: blitz_traits::events::MouseEventButton::Main,
             buttons: Default::default(),
             details: Default::default(),
             element: Default::default(),

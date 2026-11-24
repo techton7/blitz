@@ -193,7 +193,7 @@ fn add_pointer_fields(event: &JsObject, data: &BlitzPointerEvent, context: &mut 
         JsValue::from(data.element_y() as f64),
         context,
     );
-    define_value(event, "button", JsValue::from(data.button as u8), context);
+    define_value(event, "button", JsValue::from(data.button as i8), context);
     define_value(
         event,
         "buttons",

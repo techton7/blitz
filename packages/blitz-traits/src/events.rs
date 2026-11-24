@@ -899,6 +899,7 @@ impl Default for MouseEventButtons {
 impl From<MouseEventButton> for MouseEventButtons {
     fn from(value: MouseEventButton) -> Self {
         match value {
+            MouseEventButton::None => Self::None,
             MouseEventButton::Main => Self::Primary,
             MouseEventButton::Auxiliary => Self::Auxiliary,
             MouseEventButton::Secondary => Self::Secondary,
@@ -912,10 +913,13 @@ impl From<MouseEventButton> for MouseEventButtons {
 /// on the mouse to trigger the event.
 ///
 /// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/button)
+#[repr(i8)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum MouseEventButton {
-    /// Main button pressed, usually the left button or the un-initialized state
+    /// No button state changed since the previous event (e.g. `pointermove` / `pointerleave`)
     #[default]
+    None = -1,
+    /// Main button pressed, usually the left button or the un-initialized state
     Main = 0,
     /// Auxiliary button pressed, usually the wheel button or the middle button (if present)
     Auxiliary = 1,
