@@ -49,7 +49,6 @@ pub(crate) fn handle_key_or_input_event(
 
         if event.key == Key::Named(NamedKey::Escape) {
             doc.clear_keyboard_active_node();
-            doc.clear_focus();
             return;
         }
 

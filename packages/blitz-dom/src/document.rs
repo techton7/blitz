@@ -6145,4 +6145,74 @@ mod focus_visible_tests {
         assert!(doc.had_keyboard_event());
         assert!(doc.is_focus_visible(button));
     }
+
+    #[test]
+    fn escape_keydown_clears_keyboard_active_node_without_blurring_focus() {
+        use blitz_traits::events::{DomEvent, EventState, UiEvent};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        #[derive(Default, Clone)]
+        struct Collector {
+            events: Rc<RefCell<Vec<DomEvent>>>,
+        }
+
+        impl crate::events::EventHandler for Collector {
+            fn handle_event(
+                &mut self,
+                _chain: &[NodeId],
+                event: &mut DomEvent,
+                _doc: &mut dyn Document,
+                _event_state: &mut EventState,
+            ) {
+                self.events.borrow_mut().push(event.clone());
+            }
+        }
+
+        let mut doc = BaseDocument::new(DocumentConfig {
+            viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            ..Default::default()
+        });
+        let root_id = doc.root_node().id;
+        let mut mutator = doc.mutate();
+        let html = mutator.create_element(qual_name!("html", html), vec![]);
+        let body = mutator.create_element(qual_name!("body", html), vec![]);
+        let input = mutator.create_element(
+            qual_name!("input", html),
+            vec![attr(qual_name!("type"), "text")],
+        );
+        mutator.append_children(body, &[input]);
+        mutator.append_children(html, &[body]);
+        mutator.append_children(root_id, &[html]);
+        drop(mutator);
+        doc.resolve(0.0);
+
+        assert!(doc.set_focus_to(input));
+        assert_eq!(doc.get_focussed_node_id(), Some(input));
+        assert!(doc.set_keyboard_active_node(input));
+        assert_eq!(doc.get_keyboard_active_node_id(), Some(input));
+
+        let collector = Collector::default();
+        let mut driver = EventDriver::new(&mut doc, collector.clone());
+        driver.handle_ui_event(UiEvent::KeyDown(keydown(
+            Key::Named(NamedKey::Escape),
+            Modifiers::empty(),
+        )));
+
+        assert_eq!(doc.get_keyboard_active_node_id(), None);
+        assert_eq!(doc.get_focussed_node_id(), Some(input));
+
+        let events = collector.events.borrow();
+        assert!(
+            events.iter().any(|e| e.data.name() == "keydown"),
+            "expected keydown event to be dispatched"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.data.name(), "blur" | "focusout")),
+            "unexpected blur/focusout event on Escape: {:?}",
+            events.iter().map(|e| e.data.name()).collect::<Vec<_>>()
+        );
+    }
 }
