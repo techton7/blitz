@@ -46,8 +46,7 @@ fn node_scroll_range(node: &Node, include_hidden: bool) -> (Point<f64>, Point<f6
 fn viewport_axis_scrollable(overflow: Overflow, include_hidden: bool) -> bool {
     match overflow {
         Overflow::Visible | Overflow::Auto | Overflow::Scroll => true,
-        Overflow::Hidden => include_hidden,
-        Overflow::Clip => false,
+        Overflow::Hidden | Overflow::Clip => include_hidden,
     }
 }
 
@@ -757,14 +756,16 @@ impl BaseDocument {
 
                 let (min_x, max_x) = if can_x_scroll {
                     (0.0, raw_max_x)
-                } else if !include_hidden && overflow_x == Overflow::Hidden {
+                } else if !include_hidden && matches!(overflow_x, Overflow::Hidden | Overflow::Clip)
+                {
                     (current.x, current.x)
                 } else {
                     (0.0, 0.0)
                 };
                 let (min_y, max_y) = if can_y_scroll {
                     (0.0, raw_max_y)
-                } else if !include_hidden && overflow_y == Overflow::Hidden {
+                } else if !include_hidden && matches!(overflow_y, Overflow::Hidden | Overflow::Clip)
+                {
                     (current.y, current.y)
                 } else {
                     (0.0, 0.0)
@@ -1601,22 +1602,22 @@ mod tests {
         assert!(!doc.scroll_viewport_by_has_changed(0.0, -50.0));
         assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 180.0 });
 
-        // Setting overflow: clip on <html> blocks both user AND programmatic scrolling and
-        // clamps viewport_scroll back to (0, 0).
+        // Per CSS Overflow 3 §3.3, overflow: clip propagated to the viewport is interpreted as
+        // hidden: user scrolling is blocked while existing offsets and programmatic scrolling work.
         {
             let mut mutator = doc.mutate();
             mutator.set_attribute(html, qual_name!("style"), "overflow: clip;");
         }
         doc.resolve(0.0);
 
-        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 0.0 });
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 180.0 });
         assert!(!doc.viewport_can_scroll(Point { x: 0.0, y: 50.0 }));
         assert!(!doc.scroll_viewport_by_has_changed(0.0, -50.0));
         doc.scroll_to(html, 0.0, 300.0, ScrollBehavior::Instant);
         assert_eq!(
             doc.viewport_scroll(),
-            Point { x: 0.0, y: 0.0 },
-            "overflow: clip must block programmatic viewport scrolling too"
+            Point { x: 0.0, y: 300.0 },
+            "overflow: clip on the viewport must allow programmatic scrolling per CSS Overflow 3 §3.3"
         );
     }
 

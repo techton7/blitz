@@ -1,6 +1,8 @@
 //! Replaced elements with percentage `max-width` (e.g. Tailwind's `img { max-width: 100% }`)
-//! must not collapse `min-width: auto` to 0 in `SizingMode::ContentSize`, while preserving
-//! shrink-to-fit compression for inline-block containers (`DioxusLabs/blitz#1432`).
+//! must not collapse `min-width: auto` to 0 when a definite cross size transfers through
+//! `aspect-ratio`, while preserving CSS Sizing 3 §5.2.2 `MinContent` compression (WPT
+//! `css/css-flexbox/intrinsic-size/auto-min-size-001.html`) and inline-block shrink-to-fit
+//! (`DioxusLabs/blitz#1432`).
 
 use blitz_dom::DocumentConfig;
 use blitz_html::{HtmlDocument, HtmlProvider};
@@ -113,8 +115,8 @@ fn flex_row_img_with_percentage_max_width_preserves_auto_min_width() {
     );
     assert_eq!(
         size_of(&doc, "#img-auto-h").0,
-        64.0,
-        "flex item img with auto cross size must preserve min-width: auto (64px)"
+        20.0,
+        "flex item img with indefinite cross size and max-width: 100% compresses under MinContent (CSS Sizing 3 §5.2.2)"
     );
     assert_eq!(
         size_of(&doc, "#img-narrow").0,

@@ -286,12 +286,16 @@ pub fn compute_replaced_layout(
             RequestedAxis::Horizontal => {
                 style_size.width = None;
                 min_size.width = None;
-                max_size.width = None;
+                if available_space.width != AvailableSpace::MinContent {
+                    max_size.width = None;
+                }
             }
             RequestedAxis::Vertical => {
                 style_size.height = None;
                 min_size.height = None;
-                max_size.height = None;
+                if available_space.height != AvailableSpace::MinContent {
+                    max_size.height = None;
+                }
             }
             RequestedAxis::Both => {}
         }
