@@ -75,3 +75,42 @@ fn trailing_br_does_not_move_last_baseline() {
     assert_eq!(a_height, 20.0);
     assert_eq!(a_y, b_y);
 }
+
+#[test]
+fn inline_flex_inside_grid_and_flex_does_not_inflate_by_strut_descent() {
+    let doc = layout_doc(
+        r#"<style>
+            body { margin: 0; font-size: 16px; line-height: 20px; }
+            .grid { display: grid; grid-template-columns: 200px; }
+            .flex { display: flex; flex-direction: column; width: 200px; }
+            h3 { margin: 0; font-size: 16px; line-height: 20px; }
+            .btn {
+                display: inline-flex;
+                align-items: center;
+                height: 36px;
+                padding: 0 8px;
+                border: 0;
+                box-sizing: border-box;
+                font-size: 16px;
+                line-height: 20px;
+            }
+        </style>
+        <div class="grid"><h3 id="grid-h3"><button id="grid-btn" class="btn">Trigger</button></h3></div>
+        <div class="flex"><h3 id="flex-h3"><button id="flex-btn" class="btn">Trigger</button></h3></div>"#,
+    );
+    let (_, grid_h3_height) = rect(&doc, "#grid-h3");
+    let (_, grid_btn_height) = rect(&doc, "#grid-btn");
+    assert_eq!(grid_btn_height, 36.0);
+    assert_eq!(
+        grid_h3_height, 36.0,
+        "inline-root height inside grid should match inline-flex button height without strut descent inflation"
+    );
+
+    let (_, flex_h3_height) = rect(&doc, "#flex-h3");
+    let (_, flex_btn_height) = rect(&doc, "#flex-btn");
+    assert_eq!(flex_btn_height, 36.0);
+    assert_eq!(
+        flex_h3_height, 36.0,
+        "inline-root height inside flex should match inline-flex button height without strut descent inflation"
+    );
+}

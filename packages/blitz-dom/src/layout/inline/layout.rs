@@ -555,7 +555,7 @@ impl LayoutPassState<'_> {
                 let contain_layout = box_style.slow_clone_contain().contains(Contain::LAYOUT);
                 let exports_baseline = !(contain_layout
                     || (baseline_source == BaselineSource::Auto && is_block_axis_scroll_container));
-                let box_inputs = inline_box_inputs(style.size().width, margin, child_inputs);
+                let mut box_inputs = inline_box_inputs(style.size().width, margin, child_inputs);
                 drop(style);
 
                 if is_out_of_flow || is_floated {
@@ -563,6 +563,14 @@ impl LayoutPassState<'_> {
                     ibox.height = 0.0;
                     ibox.baseline = None;
                 } else {
+                    if exports_baseline && box_inputs.run_mode == RunMode::ComputeSize {
+                        // Taffy's `ComputeSize` omits baselines (`Baselines::NONE`), which causes
+                        // atomic inline boxes (`inline-flex`, `inline-grid`, definite-size
+                        // `inline-block`) to sit on the baseline and inflate line height by the
+                        // strut's descent during intrinsic sizing. Match Taffy's baseline pass by
+                        // requesting `PerformLayout` when a baseline is exported.
+                        box_inputs.run_mode = RunMode::PerformLayout;
+                    }
                     let output =
                         self.compute_child_layout(taffy::NodeId::from(ibox.id), box_inputs);
                     ibox.width = (margin.left + margin.right + output.size.width) * scale;
