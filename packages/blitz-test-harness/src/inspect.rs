@@ -56,14 +56,14 @@ impl<D: Document> Harness<D> {
     /// The border-box of `node_id`, in page coordinates
     pub fn layout_rect_of(&self, node_id: NodeId) -> Rect {
         let doc = self.base();
-        let node = doc.get_node(node_id).expect("node does not exist");
-        let pos = node.absolute_position(0.0, 0.0);
-        let layout = node.final_layout();
+        let rect = doc
+            .transformed_border_box_in_page(node_id)
+            .expect("node does not exist");
         Rect {
-            x: pos.x,
-            y: pos.y,
-            width: layout.size.width,
-            height: layout.size.height,
+            x: rect.x as f32,
+            y: rect.y as f32,
+            width: rect.width as f32,
+            height: rect.height as f32,
         }
     }
 
@@ -187,5 +187,50 @@ fn truncate(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         Some((idx, _)) => &s[..idx],
         None => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_rect_accounts_for_2d_transform_on_fixed_wrapper_and_descendant() {
+        let harness = Harness::from_html(
+            r#"<html><body style="margin:0">
+                <div id="wrapper" style="position:fixed; left:0; top:0; width:200px; height:100px; transform:translate(120px, 80px);">
+                    <div id="child" style="margin-left:10px; margin-top:15px; width:50px; height:30px;"></div>
+                </div>
+                <div id="wrapper3d" style="position:fixed; left:0; top:0; width:60px; height:40px; transform:translate3d(200px, 150px, 0);"></div>
+            </body></html>"#,
+        );
+
+        assert_eq!(
+            harness.layout_rect("#wrapper"),
+            Rect {
+                x: 120.0,
+                y: 80.0,
+                width: 200.0,
+                height: 100.0,
+            }
+        );
+        assert_eq!(
+            harness.layout_rect("#child"),
+            Rect {
+                x: 130.0,
+                y: 95.0,
+                width: 50.0,
+                height: 30.0,
+            }
+        );
+        assert_eq!(
+            harness.layout_rect("#wrapper3d"),
+            Rect {
+                x: 200.0,
+                y: 150.0,
+                width: 60.0,
+                height: 40.0,
+            }
+        );
     }
 }

@@ -3398,6 +3398,98 @@ impl BaseDocument {
         })
     }
 
+    /// Resolve `node`'s local 2D CSS transform in CSS pixels (unscaled), if any.
+    fn node_local_2d_transform(node: &Node) -> Option<kurbo::Affine> {
+        let styles = node.primary_styles()?;
+        let size = node.final_layout().size;
+        let reference_box = euclid::default::Rect::new(
+            euclid::default::Point2D::new(
+                style::values::computed::CSSPixelLength::new(0.0),
+                style::values::computed::CSSPixelLength::new(0.0),
+            ),
+            euclid::default::Size2D::new(
+                style::values::computed::CSSPixelLength::new(size.width),
+                style::values::computed::CSSPixelLength::new(size.height),
+            ),
+        );
+        crate::resolve_2d_transform(styles.get_box(), reference_box)
+    }
+
+    fn transformed_border_box(
+        &self,
+        node_id: NodeId,
+        viewport_relative: bool,
+    ) -> Option<BoundingRect> {
+        let node = self.get_node(node_id)?;
+        let size = node.final_layout().size;
+        let local_rect = kurbo::Rect::new(0.0, 0.0, size.width as f64, size.height as f64);
+
+        let mut transform = kurbo::Affine::IDENTITY;
+        let mut current_id = node_id;
+
+        loop {
+            let current = &self.nodes[current_id];
+            if let Some(local_transform) = Self::node_local_2d_transform(current) {
+                transform = local_transform * transform;
+            }
+            let loc = current.final_layout().location;
+            transform = kurbo::Affine::translate((loc.x as f64, loc.y as f64)) * transform;
+
+            let cb_id = current.containing_block();
+            let cb_is_root = cb_id
+                .and_then(|id| self.nodes.get(id))
+                .is_some_and(Node::is_root_element);
+
+            if current.taffy_position() == taffy::Position::Fixed && (cb_is_root || cb_id.is_none())
+            {
+                if !viewport_relative {
+                    let vp_scroll = self.viewport_scroll();
+                    transform = kurbo::Affine::translate((vp_scroll.x, vp_scroll.y)) * transform;
+                }
+                break;
+            }
+
+            if let Some(cb_id) = cb_id {
+                if !cb_is_root {
+                    let cb_scroll = *self.nodes[cb_id].scroll_offset();
+                    if cb_scroll.x != 0.0 || cb_scroll.y != 0.0 {
+                        transform =
+                            kurbo::Affine::translate((-cb_scroll.x, -cb_scroll.y)) * transform;
+                    }
+                }
+                current_id = cb_id;
+            } else {
+                if viewport_relative {
+                    let vp_scroll = self.viewport_scroll();
+                    transform = kurbo::Affine::translate((-vp_scroll.x, -vp_scroll.y)) * transform;
+                }
+                break;
+            }
+        }
+
+        let bbox = transform.transform_rect_bbox(local_rect);
+        Some(BoundingRect {
+            x: bbox.x0,
+            y: bbox.y0,
+            width: bbox.width(),
+            height: bbox.height(),
+        })
+    }
+
+    /// Computes the axis-aligned bounding box of `node_id`'s border box in page (document)
+    /// coordinates, accounting for 2D CSS transforms on `node_id` and its containing-block
+    /// ancestors as well as intermediate scroll offsets and `position: fixed`.
+    pub fn transformed_border_box_in_page(&self, node_id: NodeId) -> Option<BoundingRect> {
+        self.transformed_border_box(node_id, false)
+    }
+
+    /// Computes the axis-aligned bounding box of `node_id`'s border box in viewport
+    /// coordinates, accounting for 2D CSS transforms on `node_id` and its containing-block
+    /// ancestors, intermediate scroll offsets, and `position: fixed`.
+    pub fn bounding_client_rect(&self, node_id: NodeId) -> Option<BoundingRect> {
+        self.transformed_border_box(node_id, true)
+    }
+
     /// CSSOM View's `offsetLeft`/`offsetTop`/`offsetWidth`/`offsetHeight` as a single rect:
     /// the node's border box, positioned relative to the padding edge of its `offsetParent`
     /// (or to the initial containing block when the `offsetParent` is a non-positioned
@@ -5524,6 +5616,109 @@ mod geometry_viewport_scroll_tests {
             scrolled_rect.y,
             initial_rect.y - 70.0,
             "Fixed element inside transformed container must shift with viewport scroll y"
+        );
+    }
+
+    #[test]
+    fn test_transformed_border_box_and_bounding_client_rect_for_fixed_and_descendant() {
+        let (mut doc, _html, body) = make_test_doc();
+        let spacer = create_styled_div(&mut doc, "width: 100px; height: 2000px;");
+        let fixed_wrapper = create_styled_div(
+            &mut doc,
+            "position: fixed; left: 0px; top: 0px; width: 200px; height: 100px; transform: translate(120px, 80px);",
+        );
+        let child = create_styled_div(
+            &mut doc,
+            "margin-left: 10px; margin-top: 15px; width: 50px; height: 30px;",
+        );
+        let fixed_translate3d = create_styled_div(
+            &mut doc,
+            "position: fixed; left: 0px; top: 0px; width: 60px; height: 40px; transform: translate3d(200px, 150px, 0px);",
+        );
+
+        {
+            let mut mutator = doc.mutate();
+            mutator.append_children(fixed_wrapper, &[child]);
+            mutator.append_children(body, &[spacer, fixed_wrapper, fixed_translate3d]);
+        }
+
+        doc.resolve(0.0);
+
+        let wrapper_page = doc.transformed_border_box_in_page(fixed_wrapper).unwrap();
+        let wrapper_client = doc.bounding_client_rect(fixed_wrapper).unwrap();
+        assert_eq!(
+            wrapper_page,
+            BoundingRect {
+                x: 120.0,
+                y: 80.0,
+                width: 200.0,
+                height: 100.0
+            }
+        );
+        assert_eq!(wrapper_client, wrapper_page);
+
+        let child_page = doc.transformed_border_box_in_page(child).unwrap();
+        let child_client = doc.bounding_client_rect(child).unwrap();
+        assert_eq!(
+            child_page,
+            BoundingRect {
+                x: 130.0,
+                y: 95.0,
+                width: 50.0,
+                height: 30.0
+            }
+        );
+        assert_eq!(child_client, child_page);
+
+        assert_eq!(
+            doc.bounding_client_rect(fixed_translate3d).unwrap(),
+            BoundingRect {
+                x: 200.0,
+                y: 150.0,
+                width: 60.0,
+                height: 40.0
+            }
+        );
+
+        // Under viewport scroll: client rects of fixed elements and their children stay
+        // invariant, while page rects shift by viewport_scroll.
+        doc.set_viewport_scroll(Point { x: 40.0, y: 250.0 });
+
+        assert_eq!(
+            doc.bounding_client_rect(fixed_wrapper).unwrap(),
+            BoundingRect {
+                x: 120.0,
+                y: 80.0,
+                width: 200.0,
+                height: 100.0
+            }
+        );
+        assert_eq!(
+            doc.transformed_border_box_in_page(fixed_wrapper).unwrap(),
+            BoundingRect {
+                x: 160.0,
+                y: 330.0,
+                width: 200.0,
+                height: 100.0
+            }
+        );
+        assert_eq!(
+            doc.bounding_client_rect(child).unwrap(),
+            BoundingRect {
+                x: 130.0,
+                y: 95.0,
+                width: 50.0,
+                height: 30.0
+            }
+        );
+        assert_eq!(
+            doc.transformed_border_box_in_page(child).unwrap(),
+            BoundingRect {
+                x: 170.0,
+                y: 345.0,
+                width: 50.0,
+                height: 30.0
+            }
         );
     }
 }
