@@ -18,26 +18,37 @@ fn node_scroll_range(node: &Node, include_hidden: bool) -> (Point<f64>, Point<f6
         Overflow::Hidden => include_hidden,
         _ => false,
     };
-    let (can_x_scroll, can_y_scroll) = node
+    let (overflow_x, overflow_y) = node
         .primary_styles()
-        .map(|styles| {
-            (
-                scrollable(styles.clone_overflow_x()),
-                scrollable(styles.clone_overflow_y()),
-            )
-        })
-        .unwrap_or((false, false));
+        .map(|styles| (styles.clone_overflow_x(), styles.clone_overflow_y()))
+        .unwrap_or((Overflow::Visible, Overflow::Visible));
+    let can_x_scroll = scrollable(overflow_x);
+    let can_y_scroll = scrollable(overflow_y);
+    let current = *node.scroll_offset();
     let (min, max) = node.scroll_range();
-    (
-        Point {
-            x: if can_x_scroll { min.x } else { 0.0 },
-            y: if can_y_scroll { min.y } else { 0.0 },
-        },
-        Point {
-            x: if can_x_scroll { max.x } else { 0.0 },
-            y: if can_y_scroll { max.y } else { 0.0 },
-        },
-    )
+    let (min_x, max_x) = if can_x_scroll {
+        (min.x, max.x)
+    } else if !include_hidden && overflow_x == Overflow::Hidden {
+        (current.x, current.x)
+    } else {
+        (0.0, 0.0)
+    };
+    let (min_y, max_y) = if can_y_scroll {
+        (min.y, max.y)
+    } else if !include_hidden && overflow_y == Overflow::Hidden {
+        (current.y, current.y)
+    } else {
+        (0.0, 0.0)
+    };
+    (Point { x: min_x, y: min_y }, Point { x: max_x, y: max_y })
+}
+
+fn viewport_axis_scrollable(overflow: Overflow, include_hidden: bool) -> bool {
+    match overflow {
+        Overflow::Visible | Overflow::Auto | Overflow::Scroll => true,
+        Overflow::Hidden => include_hidden,
+        Overflow::Clip => false,
+    }
 }
 
 fn can_scroll_axis(current: f64, min: f64, max: f64, delta: f64) -> bool {
@@ -209,7 +220,7 @@ impl BaseDocument {
     }
 
     pub(crate) fn clamp_viewport_scroll(&mut self) {
-        let (current, min, max) = self.scroll_state(ScrollTarget::Viewport, false);
+        let (current, min, max) = self.scroll_state(ScrollTarget::Viewport, true);
         let clamped = Point {
             x: current.x.clamp(min.x, max.x),
             y: current.y.clamp(min.y, max.y),
@@ -394,17 +405,22 @@ impl BaseDocument {
             .map_or(Point { x: false, y: false }, Node::contains_overscroll)
     }
 
-    /// The scroller which unconsumed scroll is transferred to: the node's parent, or the
-    /// viewport once the chain runs out of nodes.
+    /// The scroller which unconsumed scroll is transferred to: the node's containing block,
+    /// or the viewport once the chain reaches the root element or runs out of nodes.
     fn next_scroller_in_chain(&self, target: ScrollTarget) -> Option<ScrollTarget> {
         match target {
             ScrollTarget::Viewport => None,
-            ScrollTarget::Node(node_id) => Some(
-                self.nodes
+            ScrollTarget::Node(node_id) => {
+                let root_id = self.try_root_element().map(|root| root.id);
+                let doc_root_id = self.root_node().id;
+                let next = self
+                    .nodes
                     .get(node_id)
-                    .and_then(|node| node.parent)
-                    .map_or(ScrollTarget::Viewport, ScrollTarget::Node),
-            ),
+                    .and_then(|node| node.containing_block().or(node.parent))
+                    .filter(|&cb_id| Some(cb_id) != root_id && cb_id != doc_root_id)
+                    .map_or(ScrollTarget::Viewport, ScrollTarget::Node);
+                Some(next)
+            }
         }
     }
 
@@ -666,6 +682,28 @@ impl BaseDocument {
     /// Duration (in milliseconds) of an animated scroll.
     const SMOOTH_SCROLL_DURATION_MS: f64 = 300.0;
 
+    /// Resolve the viewport's effective `overflow-x` / `overflow-y` per CSS Overflow 3 §3.3:
+    /// taken from the root element (`<html>`), propagating from `<body>` when the root element
+    /// has `overflow: visible` on both axes. Returns `(overflow_x, overflow_y, propagated_from_body)`.
+    fn viewport_overflow(&self) -> (Overflow, Overflow, bool) {
+        let Some(root) = self.try_root_element() else {
+            return (Overflow::Visible, Overflow::Visible, false);
+        };
+        let (root_x, root_y) = root
+            .primary_styles()
+            .map(|styles| (styles.clone_overflow_x(), styles.clone_overflow_y()))
+            .unwrap_or((Overflow::Visible, Overflow::Visible));
+        if root_x == Overflow::Visible
+            && root_y == Overflow::Visible
+            && let Some(body) = self.find_body_node()
+            && let Some(styles) = body.primary_styles()
+            && styles.clone_display().inside() != DisplayInside::None
+        {
+            return (styles.clone_overflow_x(), styles.clone_overflow_y(), true);
+        }
+        (root_x, root_y, false)
+    }
+
     /// Returns the current, minimum and maximum scroll offsets for the given
     /// scroll target. `include_hidden` controls whether
     /// `overflow: hidden` axes count as scrollable (they do for programmatic scrolls,
@@ -677,11 +715,15 @@ impl BaseDocument {
     ) -> (Point<f64>, Point<f64>, Point<f64>) {
         match self.canonical_scroll_target(target) {
             ScrollTarget::Viewport => {
+                let (overflow_x, overflow_y, propagated_from_body) = self.viewport_overflow();
+                let can_x_scroll = viewport_axis_scrollable(overflow_x, include_hidden);
+                let can_y_scroll = viewport_axis_scrollable(overflow_y, include_hidden);
+
                 // The viewport scrolls the root element's scrollable overflow, which includes
                 // both the root element itself and any content which overflows it (e.g. when
                 // the root element has a fixed height but its content is taller). A document
                 // without a root element has no scrollable content.
-                let (content_width, content_height) = match self.try_root_element() {
+                let (mut content_width, mut content_height) = match self.try_root_element() {
                     Some(root) => {
                         let layout = root.final_layout();
                         (
@@ -691,14 +733,47 @@ impl BaseDocument {
                     }
                     None => (0.0, 0.0),
                 };
+                // When `<body>`'s overflow propagates to the viewport (CSS Overflow 3 §3.3),
+                // `<body>` itself behaves as `overflow: visible` rather than clipping its
+                // overflow, so include `<body>`'s overflow extent even if `<body>` has a
+                // definite height (e.g. `height: 100%`).
+                if propagated_from_body && let Some(body) = self.find_body_node() {
+                    let body_layout = body.final_layout();
+                    content_width = content_width.max(
+                        (body_layout.location.x + body_layout.size.width.max(body.scroll_width()))
+                            as f64,
+                    );
+                    content_height = content_height.max(
+                        (body_layout.location.y + body_layout.size.height.max(body.scroll_height()))
+                            as f64,
+                    );
+                }
                 let scale = self.viewport.scale() as f64;
                 let window_width = self.viewport.window_size.0 as f64 / scale;
                 let window_height = self.viewport.window_size.1 as f64 / scale;
-                let max = Point {
-                    x: (content_width - window_width).max(0.0),
-                    y: (content_height - window_height).max(0.0),
+                let current = self.viewport_scroll();
+                let raw_max_x = (content_width - window_width).max(0.0);
+                let raw_max_y = (content_height - window_height).max(0.0);
+
+                let (min_x, max_x) = if can_x_scroll {
+                    (0.0, raw_max_x)
+                } else if !include_hidden && overflow_x == Overflow::Hidden {
+                    (current.x, current.x)
+                } else {
+                    (0.0, 0.0)
                 };
-                (self.viewport_scroll(), Point::ZERO, max)
+                let (min_y, max_y) = if can_y_scroll {
+                    (0.0, raw_max_y)
+                } else if !include_hidden && overflow_y == Overflow::Hidden {
+                    (current.y, current.y)
+                } else {
+                    (0.0, 0.0)
+                };
+                (
+                    current,
+                    Point { x: min_x, y: min_y },
+                    Point { x: max_x, y: max_y },
+                )
             }
             ScrollTarget::Node(node_id) => {
                 let Some(node) = self.nodes.get(node_id) else {
@@ -895,6 +970,7 @@ impl BaseDocument {
             target_start_x,
             target_start_y,
             current,
+            min,
             max,
             can_scroll_x,
             can_scroll_y,
@@ -902,15 +978,16 @@ impl BaseDocument {
             let scale = self.viewport.scale() as f64;
             let viewport_width = self.viewport.window_size.0 as f64 / scale;
             let viewport_height = self.viewport.window_size.1 as f64 / scale;
-            let (current, _min, max) = self.scroll_state(ScrollTarget::Viewport, false);
-            let can_scroll_x = max.x > 0.5;
-            let can_scroll_y = max.y > 0.5;
+            let (current, min, max) = self.scroll_state(ScrollTarget::Viewport, false);
+            let can_scroll_x = max.x - min.x > 0.5;
+            let can_scroll_y = max.y - min.y > 0.5;
             (
                 viewport_width,
                 viewport_height,
                 node_abs.x as f64,
                 node_abs.y as f64,
                 current,
+                min,
                 max,
                 can_scroll_x,
                 can_scroll_y,
@@ -925,16 +1002,16 @@ impl BaseDocument {
             let target_start_y = (node_abs.y - container_abs.y - container_border.top) as f64;
             let viewport_width = container.client_width() as f64;
             let viewport_height = container.client_height() as f64;
-            let (current, _min, max) =
+            let (current, min, max) =
                 self.scroll_state(ScrollTarget::Node(target_container), false);
             let (can_scroll_x, can_scroll_y) = container
                 .primary_styles()
                 .map(|styles| {
                     (
                         matches!(styles.clone_overflow_x(), Overflow::Scroll | Overflow::Auto)
-                            && max.x > 0.5,
+                            && max.x - min.x > 0.5,
                         matches!(styles.clone_overflow_y(), Overflow::Scroll | Overflow::Auto)
-                            && max.y > 0.5,
+                            && max.y - min.y > 0.5,
                     )
                 })
                 .unwrap_or((false, false));
@@ -944,6 +1021,7 @@ impl BaseDocument {
                 target_start_x,
                 target_start_y,
                 current,
+                min,
                 max,
                 can_scroll_x,
                 can_scroll_y,
@@ -966,12 +1044,12 @@ impl BaseDocument {
         );
 
         let target_x = if can_scroll_x {
-            aligned_x.clamp(0.0, max.x.max(0.0))
+            aligned_x.clamp(min.x, max.x.max(min.x))
         } else {
             current.x
         };
         let target_y = if can_scroll_y {
-            aligned_y.clamp(0.0, max.y.max(0.0))
+            aligned_y.clamp(min.y, max.y.max(min.y))
         } else {
             current.y
         };
@@ -1438,5 +1516,166 @@ mod tests {
             viewport_scroll.x >= 0.0 && viewport_scroll.y >= 0.0,
             "expected non-negative scroll offsets"
         );
+    }
+
+    #[test]
+    fn body_overflow_hidden_blocks_user_scroll_and_preserves_existing_offset() {
+        let (mut doc, body) = make_test_doc();
+        let spacer = create_styled_div(&mut doc, "width: 100px; height: 2000px;");
+        {
+            let mut mutator = doc.mutate();
+            mutator.append_children(body, &[spacer]);
+        }
+        doc.resolve(0.0);
+
+        // Scroll viewport down before locking body overflow.
+        assert!(doc.scroll_viewport_by_has_changed(0.0, -250.0));
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 250.0 });
+
+        // Lock body overflow (CSS Overflow 3 §3.3 propagation from <body> to viewport).
+        {
+            let mut mutator = doc.mutate();
+            mutator.set_attribute(
+                body,
+                qual_name!("style"),
+                "margin: 0; width: 800px; height: 600px; overflow: hidden;",
+            );
+        }
+        doc.resolve(0.0);
+
+        // Existing scroll offset must be preserved across resolve/clamp_viewport_scroll.
+        assert_eq!(
+            doc.viewport_scroll(),
+            Point { x: 0.0, y: 250.0 },
+            "body overflow: hidden must not reset existing viewport_scroll on resolve"
+        );
+
+        // viewport_can_scroll must reject both up and down wheel attempts.
+        assert!(!doc.viewport_can_scroll(Point { x: 0.0, y: 50.0 }));
+        assert!(!doc.viewport_can_scroll(Point { x: 0.0, y: -50.0 }));
+
+        // User wheel scrolling in either direction must fail and preserve the existing offset.
+        assert!(!doc.scroll_viewport_by_has_changed(0.0, -100.0));
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 250.0 });
+        assert!(!doc.scroll_viewport_by_has_changed(0.0, 100.0));
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 250.0 });
+        assert!(!doc.scroll_chain_by(Some(spacer), 0.0, -100.0));
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 250.0 });
+
+        // Programmatic scrollTo on the root element still works for overflow: hidden.
+        let root_id = doc.try_root_element().unwrap().id;
+        doc.scroll_to(root_id, 0.0, 400.0, ScrollBehavior::Instant);
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 400.0 });
+    }
+
+    #[test]
+    fn html_overflow_hidden_and_clip_control_viewport_scrolling() {
+        let (mut doc, body) = make_test_doc();
+        let html = doc.try_root_element().unwrap().id;
+        let spacer = create_styled_div(&mut doc, "width: 100px; height: 2000px;");
+        {
+            let mut mutator = doc.mutate();
+            mutator.append_children(body, &[spacer]);
+        }
+        doc.resolve(0.0);
+
+        // Scroll down while visible.
+        assert!(doc.scroll_viewport_by_has_changed(0.0, -180.0));
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 180.0 });
+
+        // Setting overflow: hidden on <html> takes precedence over <body> (even if body is visible/auto).
+        {
+            let mut mutator = doc.mutate();
+            mutator.set_attribute(html, qual_name!("style"), "overflow: hidden;");
+            mutator.set_attribute(
+                body,
+                qual_name!("style"),
+                "margin: 0; width: 800px; overflow: auto;",
+            );
+        }
+        doc.resolve(0.0);
+
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 180.0 });
+        assert!(!doc.viewport_can_scroll(Point { x: 0.0, y: 50.0 }));
+        assert!(!doc.viewport_can_scroll(Point { x: 0.0, y: -50.0 }));
+        assert!(!doc.scroll_viewport_by_has_changed(0.0, -50.0));
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 180.0 });
+
+        // Setting overflow: clip on <html> blocks both user AND programmatic scrolling and
+        // clamps viewport_scroll back to (0, 0).
+        {
+            let mut mutator = doc.mutate();
+            mutator.set_attribute(html, qual_name!("style"), "overflow: clip;");
+        }
+        doc.resolve(0.0);
+
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 0.0 });
+        assert!(!doc.viewport_can_scroll(Point { x: 0.0, y: 50.0 }));
+        assert!(!doc.scroll_viewport_by_has_changed(0.0, -50.0));
+        doc.scroll_to(html, 0.0, 300.0, ScrollBehavior::Instant);
+        assert_eq!(
+            doc.viewport_scroll(),
+            Point { x: 0.0, y: 0.0 },
+            "overflow: clip must block programmatic viewport scrolling too"
+        );
+    }
+
+    #[test]
+    fn position_fixed_inside_scrollable_ancestor_chains_to_viewport_not_dom_ancestor() {
+        let (mut doc, body) = make_test_doc();
+        let scroller =
+            create_styled_div(&mut doc, "width: 400px; height: 200px; overflow-y: auto;");
+        let scroller_content = create_styled_div(&mut doc, "width: 100px; height: 1000px;");
+        let fixed_modal = create_styled_div(
+            &mut doc,
+            "position: fixed; top: 50px; left: 50px; width: 200px; height: 150px;",
+        );
+        let modal_child = create_styled_div(&mut doc, "width: 100px; height: 50px;");
+        let page_spacer = create_styled_div(&mut doc, "width: 100px; height: 2000px;");
+
+        {
+            let mut mutator = doc.mutate();
+            mutator.append_children(fixed_modal, &[modal_child]);
+            mutator.append_children(scroller, &[scroller_content, fixed_modal]);
+            mutator.append_children(body, &[scroller, page_spacer]);
+        }
+        doc.resolve(0.0);
+
+        // Wheel target resolution from inside the fixed modal must skip the DOM ancestor
+        // scroller and chain to the viewport.
+        assert_eq!(
+            doc.resolve_wheel_scroll_target(Some(modal_child), Point { x: 0.0, y: 50.0 }),
+            ScrollTarget::Viewport
+        );
+
+        // Scrolling from modal_child must scroll the viewport, NOT the DOM ancestor scroller.
+        assert!(doc.scroll_chain_by(Some(modal_child), 0.0, -120.0));
+        assert_eq!(
+            *doc.nodes[scroller].scroll_offset(),
+            Point { x: 0.0, y: 0.0 },
+            "fixed modal scroll chain must not scroll its scrollable DOM ancestor"
+        );
+        assert_eq!(
+            doc.viewport_scroll(),
+            Point { x: 0.0, y: 120.0 },
+            "fixed modal scroll chain must target the viewport"
+        );
+
+        // When body overflow: hidden is also active, scrolling over the fixed modal moves neither.
+        {
+            let mut mutator = doc.mutate();
+            mutator.set_attribute(
+                body,
+                qual_name!("style"),
+                "margin: 0; width: 800px; height: 600px; overflow: hidden;",
+            );
+        }
+        doc.resolve(0.0);
+        assert!(!doc.scroll_chain_by(Some(modal_child), 0.0, -100.0));
+        assert_eq!(
+            *doc.nodes[scroller].scroll_offset(),
+            Point { x: 0.0, y: 0.0 }
+        );
+        assert_eq!(doc.viewport_scroll(), Point { x: 0.0, y: 120.0 });
     }
 }
