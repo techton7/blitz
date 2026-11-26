@@ -693,6 +693,22 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                 if let Some(outline_bounds) = cx.outline_bounds() {
                     effect_layer_clip = effect_layer_clip.union(outline_bounds);
                 }
+                if !should_clip {
+                    if !overflow.is_zero_area() {
+                        effect_layer_clip = effect_layer_clip.union(overflow);
+                    }
+                    if let Some(sc) = &node.stacking_context {
+                        let hoisted = sc.hoisted_content_bbox(self.dom.tree(), node.id, self.scale);
+                        if hoisted.right > hoisted.left && hoisted.bottom > hoisted.top {
+                            effect_layer_clip = effect_layer_clip.union(Rect::new(
+                                hoisted.left as f64 * self.scale,
+                                hoisted.top as f64 * self.scale,
+                                hoisted.right as f64 * self.scale,
+                                hoisted.bottom as f64 * self.scale,
+                            ));
+                        }
+                    }
+                }
                 effect_layer_clip.x0 += filter_expansion_area.x0;
                 effect_layer_clip.y0 += filter_expansion_area.y0;
                 effect_layer_clip.x1 += filter_expansion_area.x1;
@@ -715,7 +731,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                 }
 
                 // Opacity/Filter layer if box has opacity or a filter.
-                // Clipped to border-box as it needs to include the background and borders.
+                // Includes the border box, outset decorations, and any visible descendant overflow.
                 self.layer_manager.maybe_with_layer(
                     scene,
                     has_opacity
@@ -745,7 +761,6 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                         cx.draw_outline(scene);
                         cx.stroke_devtools(scene);
 
-                        // TODO: allow layers with opacity to be unclipped (overflow: visible)
                         let clip = if is_text_input {
                             &cx.frame.text_input_clip_shape()
                         } else {

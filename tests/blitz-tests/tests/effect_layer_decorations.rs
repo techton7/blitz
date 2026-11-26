@@ -156,3 +156,79 @@ fn filter_and_backdrop_filter_layer_bounds() {
     assert_eq!(bd.clip.to_svg(), "M0,0 L60,0 L60,60 L0,60 Z");
     assert_eq!(op.clip.to_svg(), "M-12,-12 L72,-12 L72,72 L-12,72 Z");
 }
+
+#[test]
+fn visible_overflow_protruding_arrow_in_opacity_layer() {
+    // Tooltip/popover pattern: container at (30, 30) 60x40 (bottom edge y=70) with a
+    // protruding rotated arrow (12x12 at left:24px; bottom:-6px; rotate:45deg), whose
+    // center sits at (60, 70) and extends down to y ~= 78.5 outside the border box.
+    for s in [0.5, 1.0, 2.0] {
+        let visible_html = "<html><body style='margin:0;background:#fff'>\
+            <div style='position:relative;margin:30px;width:60px;height:40px;overflow:visible;opacity:0.5;background:#00f'>\
+                <div style='position:absolute;left:24px;bottom:-6px;width:12px;height:12px;rotate:45deg;background:#00f'></div>\
+            </div></body></html>";
+        // Sample inside the protruding arrow tip below border_box (y=74 is 4px below y=70).
+        let visible_tip = sample(visible_html, s, 60.0, 74.0);
+        assert!(
+            visible_tip[2] >= 253
+                && (visible_tip[0] as i32 - 128).abs() <= 2
+                && (visible_tip[1] as i32 - 128).abs() <= 2,
+            "scale {s}: visible protruding arrow must paint outside border box at 50% alpha, got {visible_tip:?}"
+        );
+
+        let hidden_html = "<html><body style='margin:0;background:#fff'>\
+            <div style='position:relative;margin:30px;width:60px;height:40px;overflow:hidden;opacity:0.5;background:#00f'>\
+                <div style='position:absolute;left:24px;bottom:-6px;width:12px;height:12px;rotate:45deg;background:#00f'></div>\
+            </div></body></html>";
+        let hidden_tip = sample(hidden_html, s, 60.0, 74.0);
+        assert_eq!(
+            hidden_tip,
+            [255, 255, 255],
+            "scale {s}: overflow:hidden must still clip the protruding arrow"
+        );
+    }
+
+    // With backdrop-filter + opacity + overflow:visible + protruding arrow:
+    // backdrop-filter stays strictly clipped to border_box (60x40), while the opacity
+    // layer expands past y=40 to paint the protruding arrow at 50% alpha.
+    let backdrop_html = "<html><body style='margin:0;background:#fff'>\
+        <div style='position:relative;margin:30px;width:60px;height:40px;overflow:visible;opacity:0.5;backdrop-filter:blur(4px);background:#00f'>\
+            <div style='position:absolute;left:24px;bottom:-6px;width:12px;height:12px;rotate:45deg;background:#00f'></div>\
+        </div></body></html>";
+    let bd_scene = scene(backdrop_html);
+    let layers: Vec<_> = bd_scene
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            RenderCommand::PushLayer(l) => Some(l),
+            _ => None,
+        })
+        .collect();
+    let bd = layers
+        .iter()
+        .find(|l| l.backdrop_filter.is_some())
+        .expect("backdrop_filter layer");
+    let op = layers
+        .iter()
+        .find(|l| l.backdrop_filter.is_none() && (l.alpha - 0.5).abs() < 1e-4)
+        .expect("split opacity layer");
+    assert_eq!(
+        bd.clip.to_svg(),
+        "M0,0 L60,0 L60,40 L0,40 Z",
+        "backdrop-filter layer must stay clipped to border_box"
+    );
+    let op_svg = op.clip.to_svg();
+    let max_y = op_svg
+        .split_whitespace()
+        .filter_map(|tok| tok.split_once(',').and_then(|(_, y)| y.parse::<f64>().ok()))
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!(
+        max_y > 46.0,
+        "opacity layer clip must extend past border_box to include rotated arrow, got {op_svg}"
+    );
+    let tip = sample(backdrop_html, 1.0, 60.0, 74.0);
+    assert!(
+        tip[2] >= 253 && (tip[0] as i32 - 128).abs() <= 2 && (tip[1] as i32 - 128).abs() <= 2,
+        "protruding arrow with backdrop-filter must still paint outside border_box at 50% alpha, got {tip:?}"
+    );
+}
