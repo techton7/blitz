@@ -85,6 +85,7 @@ mod pseudo_element_flow_classification;
 mod pseudo_element_update;
 mod rem_after_viewport_change;
 mod render_blocking_stylesheet;
+mod replaced_max_size_content_size;
 mod resize_restyle;
 mod reversed_list;
 mod rotate_z_axis;
